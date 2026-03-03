@@ -1,8 +1,7 @@
-#include <windows.h>
-
 #include "pm_organ/app/app.h"
 #include "pm_organ/core/assert.h"
 #include "pm_organ/core/memory_arena.h"
+#include "pm_organ/platform/time.h"
 #include "pm_organ/platform/window.h"
 
 typedef struct AppState
@@ -18,6 +17,12 @@ int App_Run (void)
 
     if (MemoryArena_Create(&bootstrap_arena, 1024 * 1024) == false)
     {
+        return 1;
+    }
+
+    if (PlatformTime_Initialize() == false)
+    {
+        MemoryArena_Destroy(&bootstrap_arena);
         return 1;
     }
 
@@ -37,7 +42,7 @@ int App_Run (void)
     while (app->main_window.is_running)
     {
         PlatformWindow_PumpMessages(&app->main_window);
-        Sleep(1);
+        PlatformTime_SleepMilliseconds(1);
     }
 
     PlatformWindow_Destroy(&app->main_window);
