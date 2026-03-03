@@ -1,11 +1,13 @@
 #include "pm_organ/app/app.h"
 #include "pm_organ/core/assert.h"
+#include "pm_organ/core/frame_timer.h"
 #include "pm_organ/core/memory_arena.h"
 #include "pm_organ/platform/time.h"
 #include "pm_organ/platform/window.h"
 
 typedef struct AppState
 {
+    FrameTimer frame_timer;
     Window main_window;
 } AppState;
 
@@ -29,6 +31,9 @@ int App_Run (void)
     app = MEMORY_ARENA_PUSH_STRUCT(&bootstrap_arena, AppState);
     ASSERT(app != NULL);
 
+    FrameTimer_Initialize(&app->frame_timer);
+    FrameTimer_SetTargetHz(&app->frame_timer, 60.0);
+
     window_desc.title = "PM-Organ";
     window_desc.client_width = 1280;
     window_desc.client_height = 720;
@@ -41,8 +46,9 @@ int App_Run (void)
 
     while (app->main_window.is_running)
     {
+        FrameTimer_BeginFrame(&app->frame_timer);
         PlatformWindow_PumpMessages(&app->main_window);
-        PlatformTime_SleepMilliseconds(1);
+        FrameTimer_EndFrame(&app->frame_timer);
     }
 
     PlatformWindow_Destroy(&app->main_window);

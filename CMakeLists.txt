@@ -9,6 +9,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 add_executable(pm_organ WIN32
     src/app/app.c
     src/app/main.c
+    src/core/frame_timer.c
     src/core/memory_arena.c
     src/platform/win32/time_win32.c
     src/platform/win32/window_win32.c
