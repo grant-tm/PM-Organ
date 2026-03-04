@@ -10,6 +10,7 @@ add_executable(pm_organ WIN32
     src/app/app.c
     src/audio/audio_device.c
     src/audio/audio_engine.c
+    src/audio/test_tone_source.c
     src/app/main.c
     src/core/frame_timer.c
     src/core/memory_arena.c

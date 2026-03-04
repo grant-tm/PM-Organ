@@ -1,6 +1,7 @@
 #include "pm_organ/app/app.h"
 #include "pm_organ/audio/audio_device.h"
 #include "pm_organ/audio/audio_engine.h"
+#include "pm_organ/audio/test_tone_source.h"
 #include "pm_organ/core/assert.h"
 #include "pm_organ/core/frame_timer.h"
 #include "pm_organ/core/memory_arena.h"
@@ -13,6 +14,7 @@ typedef struct AppState
     AudioEngine audio_engine;
     FrameTimer frame_timer;
     Window main_window;
+    TestToneSource test_tone_source;
 } AppState;
 
 static void RenderEngineBlock (
@@ -43,6 +45,7 @@ int App_Run (void)
     AppState *app;
     AudioDeviceDesc audio_desc;
     AudioEngineDesc engine_desc;
+    TestToneSourceDesc test_tone_desc;
     MemoryArena bootstrap_arena;
     WindowDesc window_desc;
 
@@ -83,6 +86,19 @@ int App_Run (void)
         MemoryArena_Destroy(&bootstrap_arena);
         return 1;
     }
+
+    test_tone_desc.frequency_hz = 220.0;
+    test_tone_desc.amplitude = 0.05f;
+
+    if (TestToneSource_Initialize(&app->test_tone_source, &test_tone_desc) == false)
+    {
+        AudioEngine_Shutdown(&app->audio_engine);
+        PlatformWindow_Destroy(&app->main_window);
+        MemoryArena_Destroy(&bootstrap_arena);
+        return 1;
+    }
+
+    AudioEngine_SetRenderSource(&app->audio_engine, TestToneSource_Render, &app->test_tone_source);
 
     audio_desc.sample_rate = 48000;
     audio_desc.channel_count = 2;
