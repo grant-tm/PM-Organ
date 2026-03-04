@@ -20,6 +20,9 @@ typedef struct DebugGuiFrameDesc
     bool output_is_muted;
     f32 drive_amplitude;
     f32 windchest_pressure;
+    f32 effective_drive_requested;
+    f32 effective_drive_applied;
+    f32 effective_drive_saturation_ratio;
     f32 master_gain;
     u32 active_preset_index;
     u32 active_excitation_mode;

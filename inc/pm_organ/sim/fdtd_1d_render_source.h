@@ -50,6 +50,9 @@ typedef struct Fdtd1DRenderSource
     f64 smoothed_drive_amplitude;
     f64 windchest_pressure;
     f64 smoothed_windchest_pressure;
+    f64 last_requested_drive;
+    f64 last_applied_drive;
+    f64 last_drive_saturation_ratio;
     Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_pending;
     u32 startup_impulse_target_index;

@@ -676,6 +676,7 @@ int App_Run (void)
 
     while (app->main_window.is_running)
     {
+        const Fdtd1DRenderSource *active_render_source;
         DebugGuiFrameActions gui_actions;
         DebugGuiFrameDesc gui_frame_desc;
         const char *excitation_mode_names[APP_EXCITATION_MODE_COUNT];
@@ -691,6 +692,7 @@ int App_Run (void)
         {
             preset_names[preset_type] = GetFdtdPresetName(preset_type);
         }
+        active_render_source = &app->fdtd_render_sources[app->active_fdtd_preset];
         excitation_mode_names[0] = GetExcitationModeName(APP_EXCITATION_MODE_IMPULSE);
         excitation_mode_names[1] = GetExcitationModeName(APP_EXCITATION_MODE_CONSTANT);
         excitation_mode_names[2] = GetExcitationModeName(APP_EXCITATION_MODE_NOISE);
@@ -707,6 +709,9 @@ int App_Run (void)
         gui_frame_desc.output_is_muted = app->output_is_muted;
         gui_frame_desc.drive_amplitude = app->drive_amplitude;
         gui_frame_desc.windchest_pressure = app->windchest_pressure;
+        gui_frame_desc.effective_drive_requested = (f32) active_render_source->last_requested_drive;
+        gui_frame_desc.effective_drive_applied = (f32) active_render_source->last_applied_drive;
+        gui_frame_desc.effective_drive_saturation_ratio = (f32) active_render_source->last_drive_saturation_ratio;
         gui_frame_desc.master_gain = app->master_gain;
         gui_frame_desc.active_preset_index = app->active_fdtd_preset;
         gui_frame_desc.active_excitation_mode = app->active_excitation_mode;

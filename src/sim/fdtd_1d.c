@@ -8,6 +8,7 @@ static const f64 FDTD_1D_PI = 3.14159265358979323846;
 static const f64 OPEN_END_CORRECTION_COEFFICIENT = 0.45;
 static const f64 OPEN_END_RADIATION_RESISTANCE_SCALE = 1.5;
 static const u32 NONLINEAR_MOUTH_MAX_DELAY_SAMPLES = 64;
+static const f32 JET_LABIUM_INJECTION_MAX = 0.01f;
 static const Fdtd1DNonlinearMouthParameters DEFAULT_NONLINEAR_MOUTH_PARAMETERS =
 {
     0.0002f, /* max_output */
@@ -514,6 +515,7 @@ static f32 ComputeJetLabiumExcitation (
     f32 delayed_feedback;
     f32 feedback_term;
     f32 feedback_signal;
+    f32 drive_reference;
     f32 normalized_wind_drive;
     f32 jet_drive;
     f32 jet_error;
@@ -524,6 +526,7 @@ static f32 ComputeJetLabiumExcitation (
     f32 local_velocity;
     f32 mouth_input;
     f32 output_sample;
+    f32 soft_wind_drive;
     f32 drive_norm;
     f32 turbulence;
     f32 turbulence_weight;
@@ -543,17 +546,22 @@ static f32 ComputeJetLabiumExcitation (
     ASSERT(state->mouth_feedback_delay_lengths != NULL);
     ASSERT(state->mouth_feedback_delay_indices != NULL);
 
-    if (state->jet_labium.drive_limit > 0.0f)
+    drive_reference = state->jet_labium.drive_limit;
+    if (drive_reference <= 0.0f)
     {
-        normalized_wind_drive = ClampF32(
-            wind_drive / state->jet_labium.drive_limit,
-            0.0f,
-            1.0f
-        );
+        drive_reference = 0.000001f;
     }
-    else
+
+    wind_drive = ClampF32(wind_drive, 0.0f, 0.1f);
+    soft_wind_drive = drive_reference * tanhf(wind_drive / drive_reference);
+    normalized_wind_drive = (2.0f / (f32) FDTD_1D_PI) * atanf(wind_drive / drive_reference);
+    if (normalized_wind_drive < 0.0f)
     {
         normalized_wind_drive = 0.0f;
+    }
+    else if (normalized_wind_drive > 1.0f)
+    {
+        normalized_wind_drive = 1.0f;
     }
 
     dynamic_delay_min = state->jet_labium.delay_samples / 2;
@@ -613,11 +621,11 @@ static f32 ComputeJetLabiumExcitation (
 
     feedback_term = ClampF32(
         delayed_feedback,
-        -4.0f * state->jet_labium.drive_limit,
-        4.0f * state->jet_labium.drive_limit
+        -4.0f * drive_reference,
+        4.0f * drive_reference
     );
-    jet_noise = wind_drive * state->jet_labium.noise_scale * NextNoiseSample(state);
-    jet_drive = wind_drive + jet_noise - feedback_term;
+    jet_noise = soft_wind_drive * state->jet_labium.noise_scale * NextNoiseSample(state);
+    jet_drive = soft_wind_drive + jet_noise - feedback_term;
     jet_state = state->source_jet_state[source_index];
     jet_state += state->jet_labium.jet_smoothing * (jet_drive - jet_state);
     state->source_jet_state[source_index] = jet_state;
@@ -960,8 +968,9 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
                     state,
                     source_index,
                     cell_index,
-                    ClampF32((f32) excitation->value, 0.0f, state->jet_labium.drive_limit)
+                    ClampF32((f32) excitation->value, 0.0f, 0.1f)
                 );
+                excitation_sample = ClampF32(excitation_sample, -JET_LABIUM_INJECTION_MAX, JET_LABIUM_INJECTION_MAX);
             } break;
 
             case SIMULATION_EXCITATION_TYPE_CUSTOM:

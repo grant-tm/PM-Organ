@@ -347,6 +347,10 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
             frame_actions->request_set_windchest_pressure = true;
         }
 
+        ImGui::Text("Effective Drive Requested: %.6f", frame_desc->effective_drive_requested);
+        ImGui::Text("Effective Drive Applied:   %.6f", frame_desc->effective_drive_applied);
+        ImGui::Text("Drive Saturation Ratio:    %.3f", frame_desc->effective_drive_saturation_ratio);
+
         ImGui::Separator();
         ImGui::Text("Output");
         frame_actions->master_gain = frame_desc->master_gain;

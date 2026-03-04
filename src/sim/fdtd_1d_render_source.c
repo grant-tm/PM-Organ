@@ -20,7 +20,8 @@ static const f64 FEEDBACK_NOISE_SCALE = 0.10;
 static const f64 FEEDBACK_PRESSURE_COEFFICIENT = 0.65;
 static const f64 FEEDBACK_VELOCITY_COEFFICIENT = 0.25;
 static const f64 MAX_SAFE_DRIVE_AMPLITUDE = 0.002;
-static const f64 MAX_SAFE_DRIVE_AMPLITUDE_JET_LABIUM = 0.0022;
+static const f64 JET_LABIUM_SOFT_DRIVE_SCALE = 0.0035;
+static const f64 JET_LABIUM_HARD_DRIVE_LIMIT = 0.01;
 
 static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
 {
@@ -53,6 +54,24 @@ static f64 ComputeSmoothedDriveAmplitude (f64 current_value, f64 target_value, f
 
     smoothing_alpha = 1.0 - exp(-block_seconds / DRIVE_SMOOTHING_SECONDS);
     return current_value + (target_value - current_value) * smoothing_alpha;
+}
+
+static f64 ComputeSoftLimitedDrive (f64 requested_drive, f64 soft_scale, f64 hard_limit)
+{
+    f64 soft_limited;
+
+    if (requested_drive <= 0.0)
+    {
+        return 0.0;
+    }
+
+    if (soft_scale <= 0.0)
+    {
+        return ClampF64(requested_drive, 0.0, hard_limit);
+    }
+
+    soft_limited = soft_scale * tanh(requested_drive / soft_scale);
+    return ClampF64(soft_limited, 0.0, hard_limit);
 }
 
 static f64 ComputeAverageMouthFeedbackSignal (
@@ -168,6 +187,9 @@ bool Fdtd1DRenderSource_Initialize (
     source->smoothed_drive_amplitude = desc->drive_amplitude;
     source->windchest_pressure = ClampNonNegativeF64(desc->windchest_pressure);
     source->smoothed_windchest_pressure = source->windchest_pressure;
+    source->last_requested_drive = 0.0;
+    source->last_applied_drive = 0.0;
+    source->last_drive_saturation_ratio = 0.0;
     source->output_extraction_mode = desc->output_extraction_mode;
 
     return true;
@@ -426,23 +448,35 @@ void Fdtd1DRenderSource_Render (
 
             case FDTD_1D_EXCITATION_MODE_JET_LABIUM:
             {
-                f64 bounded_drive_amplitude;
+                f64 applied_drive_amplitude;
 
-                bounded_drive_amplitude = ClampF64(
+                applied_drive_amplitude = ComputeSoftLimitedDrive(
                     effective_drive_amplitude,
-                    0.0,
-                    MAX_SAFE_DRIVE_AMPLITUDE_JET_LABIUM
+                    JET_LABIUM_SOFT_DRIVE_SCALE,
+                    JET_LABIUM_HARD_DRIVE_LIMIT
                 );
+                source->last_requested_drive = effective_drive_amplitude;
+                source->last_applied_drive = applied_drive_amplitude;
+                source->last_drive_saturation_ratio =
+                    (effective_drive_amplitude > 0.0) ?
+                        (applied_drive_amplitude / effective_drive_amplitude) :
+                        0.0;
 
                 memset(&excitation, 0, sizeof(excitation));
                 excitation.type = SIMULATION_EXCITATION_TYPE_JET_LABIUM;
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = bounded_drive_amplitude;
+                excitation.value = applied_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;
         }
+    }
+    else
+    {
+        source->last_requested_drive = 0.0;
+        source->last_applied_drive = 0.0;
+        source->last_drive_saturation_ratio = 0.0;
     }
 
     output_sample_count = (usize) block_frame_count * (usize) channel_count;
