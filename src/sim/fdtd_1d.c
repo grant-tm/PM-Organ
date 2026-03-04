@@ -175,6 +175,22 @@ static f32 NextNoiseSample (Fdtd1DState *state)
     return ((f32) ((state->noise_state >> 8) & 0x00FFFFFFu) / 8388607.5f) - 1.0f;
 }
 
+static void InjectDistributedPressureImpulse (Fdtd1DState *state, u32 cell_index, f32 amplitude)
+{
+    ASSERT(state != NULL);
+    ASSERT(cell_index < state->pressure_cell_count);
+
+    if ((cell_index > 0) && (cell_index + 1 < state->pressure_cell_count))
+    {
+        state->pressure[cell_index - 1] += 0.25f * amplitude;
+        state->pressure[cell_index] += 0.50f * amplitude;
+        state->pressure[cell_index + 1] += 0.25f * amplitude;
+        return;
+    }
+
+    state->pressure[cell_index] += amplitude;
+}
+
 static void UpdateVelocityField (Fdtd1DState *state)
 {
     u32 velocity_index;
@@ -293,7 +309,14 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
             } break;
         }
 
-        state->pressure[cell_index] += excitation_sample;
+        if (excitation->type == SIMULATION_EXCITATION_TYPE_IMPULSE)
+        {
+            InjectDistributedPressureImpulse(state, cell_index, excitation_sample);
+        }
+        else
+        {
+            state->pressure[cell_index] += excitation_sample;
+        }
 
         if (excitation->remaining_frame_count > 0)
         {
