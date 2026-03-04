@@ -99,11 +99,13 @@ typedef struct VerificationSettings
     VerificationPreset preset;
     Fdtd1DProbeType probe_type;
     VerificationExcitationType excitation_type;
+    Fdtd1DNonlinearMouthParameters nonlinear_mouth_parameters;
     const char *csv_output_path;
     bool source_index_was_overridden;
     bool left_probe_index_was_overridden;
     bool right_probe_index_was_overridden;
     bool run_length_sweep;
+    bool run_nonlinear_mouth_sweep;
     u32 block_count;
     u32 length_sweep_start_cell_count;
     u32 length_sweep_end_cell_count;
@@ -112,6 +114,9 @@ typedef struct VerificationSettings
     u32 source_cell_index;
     u32 left_probe_index;
     u32 right_probe_index;
+    f64 nonlinear_mouth_feedback_scale_start;
+    f64 nonlinear_mouth_feedback_scale_end;
+    f64 nonlinear_mouth_feedback_scale_step;
 } VerificationSettings;
 
 typedef struct VerificationRunSummary
@@ -133,6 +138,21 @@ typedef struct LengthSweepResult
     f64 measured_fundamental_magnitude;
     f64 final_energy_drift;
 } LengthSweepResult;
+
+typedef struct NonlinearMouthSweepResult
+{
+    f64 feedback_scale;
+    f64 early_rms;
+    f64 late_to_early_rms_ratio;
+    f64 dominant_frequency_drift_hz;
+    f64 max_output_abs;
+    f64 energy_drift;
+    bool early_rms_ok;
+    bool late_to_early_rms_ok;
+    bool dominant_frequency_drift_ok;
+    bool energy_drift_ok;
+    bool is_stable_candidate;
+} NonlinearMouthSweepResult;
 
 static const char *GetProbeTypeName (Fdtd1DProbeType probe_type)
 {
@@ -240,6 +260,32 @@ static const char *GetExcitationTypeName (VerificationExcitationType excitation_
     return "unknown";
 }
 
+static bool EvaluateEarlyRmsGate (f64 early_rms)
+{
+    static const f64 EARLY_RMS_MIN = 0.01;
+    return early_rms >= EARLY_RMS_MIN;
+}
+
+static bool EvaluateLateToEarlyRmsGate (f64 late_to_early_rms_ratio)
+{
+    static const f64 LATE_EARLY_RATIO_MIN = 0.5;
+    static const f64 LATE_EARLY_RATIO_MAX = 1.5;
+    return (late_to_early_rms_ratio >= LATE_EARLY_RATIO_MIN) &&
+           (late_to_early_rms_ratio <= LATE_EARLY_RATIO_MAX);
+}
+
+static bool EvaluateDominantFrequencyDriftGate (f64 dominant_frequency_drift_hz)
+{
+    static const f64 MAX_DOMINANT_FREQUENCY_DRIFT_HZ = 2.0;
+    return dominant_frequency_drift_hz <= MAX_DOMINANT_FREQUENCY_DRIFT_HZ;
+}
+
+static bool EvaluateEnergyDriftGate (f64 energy_drift)
+{
+    static const f64 MAX_ABS_ENERGY_DRIFT = 1.0;
+    return fabs(energy_drift) <= MAX_ABS_ENERGY_DRIFT;
+}
+
 static void ConfigureSolver (
     const VerificationSettings *settings,
     Fdtd1DDesc *desc,
@@ -249,7 +295,7 @@ static void ConfigureSolver (
 )
 {
     static const f64 TEST_COURANT_NUMBER = 0.9;
-    static const f64 DEFAULT_SOURCE_RATIO = 24.0 / 128.0;
+    static const f64 DEFAULT_SOURCE_RATIO = 6.0 / 128.0;
     static const f64 DEFAULT_LEFT_PROBE_RATIO = 72.0 / 128.0;
     static const f64 DEFAULT_RIGHT_PROBE_RATIO = 104.0 / 128.0;
     u32 pressure_cell_count;
@@ -480,6 +526,32 @@ static bool TryParseUnsignedValue (const char *text, const char *prefix, u32 *va
     return true;
 }
 
+static bool TryParseDoubleValue (const char *text, const char *prefix, f64 *value)
+{
+    usize prefix_length;
+    char *end_pointer;
+    double parsed_value;
+
+    ASSERT(text != NULL);
+    ASSERT(prefix != NULL);
+    ASSERT(value != NULL);
+
+    prefix_length = strlen(prefix);
+    if (_strnicmp(text, prefix, prefix_length) != 0)
+    {
+        return false;
+    }
+
+    parsed_value = strtod(text + prefix_length, &end_pointer);
+    if ((end_pointer == (text + prefix_length)) || (*end_pointer != '\0'))
+    {
+        return false;
+    }
+
+    *value = (f64) parsed_value;
+    return true;
+}
+
 static u32 RoundUpToMultiple (u32 value, u32 multiple)
 {
     ASSERT(multiple > 0);
@@ -499,19 +571,30 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->preset = VERIFICATION_PRESET_RIGID_RIGID;
     settings->probe_type = FDTD_1D_PROBE_TYPE_PRESSURE;
     settings->excitation_type = VERIFICATION_EXCITATION_TYPE_IMPULSE;
+    settings->nonlinear_mouth_parameters.max_output = 0.0012f;
+    settings->nonlinear_mouth_parameters.noise_scale = 0.04f;
+    settings->nonlinear_mouth_parameters.pressure_feedback = 0.45f;
+    settings->nonlinear_mouth_parameters.velocity_feedback = 0.12f;
+    settings->nonlinear_mouth_parameters.saturation_gain = 80.0f;
+    settings->nonlinear_mouth_parameters.drive_limit = 0.002f;
+    settings->nonlinear_mouth_parameters.delay_samples = 8;
     settings->csv_output_path = NULL;
     settings->source_index_was_overridden = false;
     settings->left_probe_index_was_overridden = false;
     settings->right_probe_index_was_overridden = false;
     settings->run_length_sweep = false;
+    settings->run_nonlinear_mouth_sweep = false;
     settings->block_count = 256;
     settings->length_sweep_start_cell_count = 64;
     settings->length_sweep_end_cell_count = 256;
     settings->length_sweep_step_cell_count = 32;
     settings->pressure_cell_count = 128;
-    settings->source_cell_index = 16;
-    settings->left_probe_index = 96;
-    settings->right_probe_index = 112;
+    settings->source_cell_index = 6;
+    settings->left_probe_index = 72;
+    settings->right_probe_index = 104;
+    settings->nonlinear_mouth_feedback_scale_start = 0.5;
+    settings->nonlinear_mouth_feedback_scale_end = 1.5;
+    settings->nonlinear_mouth_feedback_scale_step = 0.25;
 }
 
 static void ParseArguments (int argc, char **argv, VerificationSettings *settings)
@@ -523,6 +606,7 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
     for (argument_index = 1; argument_index < argc; argument_index += 1)
     {
         const char *argument;
+        f64 parsed_f64;
         u32 parsed_value;
 
         argument = argv[argument_index];
@@ -608,6 +692,73 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
             continue;
         }
 
+        if ((_stricmp(argument, "mouth-sweep") == 0) || (_stricmp(argument, "sweep-mouth") == 0))
+        {
+            settings->run_nonlinear_mouth_sweep = true;
+            settings->excitation_type = VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "mouth_delay=", &parsed_value))
+        {
+            if (parsed_value > 0)
+            {
+                settings->nonlinear_mouth_parameters.delay_samples = parsed_value;
+            }
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_max_output=", &parsed_f64))
+        {
+            settings->nonlinear_mouth_parameters.max_output = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_noise_scale=", &parsed_f64))
+        {
+            settings->nonlinear_mouth_parameters.noise_scale = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_pressure_feedback=", &parsed_f64))
+        {
+            settings->nonlinear_mouth_parameters.pressure_feedback = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_velocity_feedback=", &parsed_f64))
+        {
+            settings->nonlinear_mouth_parameters.velocity_feedback = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_saturation_gain=", &parsed_f64))
+        {
+            settings->nonlinear_mouth_parameters.saturation_gain = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_drive_limit=", &parsed_f64))
+        {
+            settings->nonlinear_mouth_parameters.drive_limit = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_feedback_scale_start=", &settings->nonlinear_mouth_feedback_scale_start))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_feedback_scale_end=", &settings->nonlinear_mouth_feedback_scale_end))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_feedback_scale_step=", &settings->nonlinear_mouth_feedback_scale_step))
+        {
+            continue;
+        }
+
         settings->csv_output_path = argument;
     }
 
@@ -615,6 +766,10 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
     settings->length_sweep_start_cell_count = RoundUpToMultiple(settings->length_sweep_start_cell_count, 8);
     settings->length_sweep_end_cell_count = RoundUpToMultiple(settings->length_sweep_end_cell_count, 8);
     settings->length_sweep_step_cell_count = RoundUpToMultiple(settings->length_sweep_step_cell_count, 8);
+    if (settings->nonlinear_mouth_feedback_scale_step <= 0.0)
+    {
+        settings->nonlinear_mouth_feedback_scale_step = 0.25;
+    }
 }
 
 static bool WriteCaptureCsv (const char *path, const SimulationOfflineCapture *capture)
@@ -1231,6 +1386,12 @@ static bool RunVerification (
         goto cleanup;
     }
 
+    if (Fdtd1D_SetNonlinearMouthParameters(&solver, &settings->nonlinear_mouth_parameters) == false)
+    {
+        fprintf(stderr, "Failed to configure nonlinear mouth parameters.\n");
+        goto cleanup;
+    }
+
     simulation = Fdtd1D_GetSimulation(&solver);
 
     capture->channel_count = solver_desc->output_channel_count;
@@ -1368,6 +1529,7 @@ int main (int argc, char **argv)
     VerificationSettings settings;
     VerificationRunSummary summary;
     LengthSweepResult sweep_results[32];
+    NonlinearMouthSweepResult nonlinear_mouth_sweep_results[32];
     Fdtd1DDesc solver_desc;
     Fdtd1DProbeDesc probe_descs[2];
     Fdtd1DSourceDesc source_descs[1];
@@ -1461,6 +1623,103 @@ int main (int argc, char **argv)
                 delta_percent,
                 sweep_results[block_index].measured_fundamental_magnitude,
                 sweep_results[block_index].final_energy_drift
+            );
+        }
+
+        return 0;
+    }
+
+    if (settings.run_nonlinear_mouth_sweep)
+    {
+        f64 feedback_scale;
+
+        sweep_result_count = 0;
+        for (feedback_scale = settings.nonlinear_mouth_feedback_scale_start;
+             feedback_scale <= settings.nonlinear_mouth_feedback_scale_end;
+             feedback_scale += settings.nonlinear_mouth_feedback_scale_step)
+        {
+            VerificationSettings sweep_settings;
+
+            if (sweep_result_count >= ARRAY_COUNT(nonlinear_mouth_sweep_results))
+            {
+                break;
+            }
+
+            sweep_settings = settings;
+            sweep_settings.run_nonlinear_mouth_sweep = false;
+            sweep_settings.excitation_type = VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+            sweep_settings.nonlinear_mouth_parameters.pressure_feedback =
+                settings.nonlinear_mouth_parameters.pressure_feedback * (f32) feedback_scale;
+            sweep_settings.nonlinear_mouth_parameters.velocity_feedback =
+                settings.nonlinear_mouth_parameters.velocity_feedback * (f32) feedback_scale;
+
+            if (RunVerification(&sweep_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
+            {
+                return 1;
+            }
+
+            nonlinear_mouth_sweep_results[sweep_result_count].feedback_scale = feedback_scale;
+            nonlinear_mouth_sweep_results[sweep_result_count].early_rms =
+                summary.sustained.early_rms;
+            nonlinear_mouth_sweep_results[sweep_result_count].late_to_early_rms_ratio =
+                summary.sustained.late_to_early_rms_ratio;
+            nonlinear_mouth_sweep_results[sweep_result_count].dominant_frequency_drift_hz =
+                summary.sustained.dominant_frequency_drift_hz;
+            nonlinear_mouth_sweep_results[sweep_result_count].max_output_abs =
+                summary.stats.max_abs_output;
+            nonlinear_mouth_sweep_results[sweep_result_count].energy_drift =
+                summary.energy.final_energy - summary.energy.initial_energy;
+            nonlinear_mouth_sweep_results[sweep_result_count].early_rms_ok =
+                EvaluateEarlyRmsGate(nonlinear_mouth_sweep_results[sweep_result_count].early_rms);
+            nonlinear_mouth_sweep_results[sweep_result_count].late_to_early_rms_ok =
+                EvaluateLateToEarlyRmsGate(nonlinear_mouth_sweep_results[sweep_result_count].late_to_early_rms_ratio);
+            nonlinear_mouth_sweep_results[sweep_result_count].dominant_frequency_drift_ok =
+                EvaluateDominantFrequencyDriftGate(nonlinear_mouth_sweep_results[sweep_result_count].dominant_frequency_drift_hz);
+            nonlinear_mouth_sweep_results[sweep_result_count].energy_drift_ok =
+                EvaluateEnergyDriftGate(nonlinear_mouth_sweep_results[sweep_result_count].energy_drift);
+            nonlinear_mouth_sweep_results[sweep_result_count].is_stable_candidate =
+                nonlinear_mouth_sweep_results[sweep_result_count].early_rms_ok &&
+                nonlinear_mouth_sweep_results[sweep_result_count].late_to_early_rms_ok &&
+                nonlinear_mouth_sweep_results[sweep_result_count].dominant_frequency_drift_ok &&
+                nonlinear_mouth_sweep_results[sweep_result_count].energy_drift_ok;
+            sweep_result_count += 1;
+            free(capture.samples);
+            capture.samples = NULL;
+        }
+
+        printf("FDTD 1D Nonlinear Mouth Sweep\n\n");
+        printf("Setup\n");
+        printf("  preset:                 %s\n", GetPresetName(settings.preset));
+        printf("  probe_type:             %s\n", GetProbeTypeName(settings.probe_type));
+        printf("  blocks:                 %u\n", settings.block_count);
+        printf("  feedback_scale_start:   %.3f\n", settings.nonlinear_mouth_feedback_scale_start);
+        printf("  feedback_scale_end:     %.3f\n", settings.nonlinear_mouth_feedback_scale_end);
+        printf("  feedback_scale_step:    %.3f\n", settings.nonlinear_mouth_feedback_scale_step);
+        printf("  mouth_max_output:       %.6f\n", settings.nonlinear_mouth_parameters.max_output);
+        printf("  mouth_noise_scale:      %.6f\n", settings.nonlinear_mouth_parameters.noise_scale);
+        printf("  mouth_saturation_gain:  %.3f\n", settings.nonlinear_mouth_parameters.saturation_gain);
+        printf("  mouth_drive_limit:      %.6f\n", settings.nonlinear_mouth_parameters.drive_limit);
+        printf("  mouth_delay:            %u\n", settings.nonlinear_mouth_parameters.delay_samples);
+        printf("\n");
+        printf("Gates\n");
+        printf("  early_rms_min:          0.01\n");
+        printf("  late/early_rms_ratio:   [0.5, 1.5]\n");
+        printf("  dominant_freq_drift_hz: <= 2.0\n");
+        printf("  abs_energy_drift:       <= 1.0\n");
+        printf("\n");
+        printf("Sweep Results\n");
+        printf("  scale    early_rms  late/early_rms   freq_drift_hz   max_output_abs   energy_drift    stable\n");
+        for (block_index = 0; block_index < sweep_result_count; block_index += 1)
+        {
+            printf(
+                "  %-8.3f %-10.6f %-15.6f %-15.3f %-15.6f %-13.9f %s\n",
+                nonlinear_mouth_sweep_results[block_index].feedback_scale,
+                nonlinear_mouth_sweep_results[block_index].early_rms,
+                nonlinear_mouth_sweep_results[block_index].late_to_early_rms_ratio,
+                nonlinear_mouth_sweep_results[block_index].dominant_frequency_drift_hz,
+                nonlinear_mouth_sweep_results[block_index].max_output_abs,
+                nonlinear_mouth_sweep_results[block_index].energy_drift,
+                nonlinear_mouth_sweep_results[block_index].is_stable_candidate ? "yes" : "no"
             );
         }
 
@@ -1746,6 +2005,18 @@ int main (int argc, char **argv)
     );
     printf("  dominant_freq_drift_hz: %.2f\n",
         summary.sustained.dominant_frequency_drift_hz
+    );
+    printf("  early_rms_gate:         %s\n",
+        EvaluateEarlyRmsGate(summary.sustained.early_rms) ? "pass" : "fail"
+    );
+    printf("  late/early_rms_gate:    %s\n",
+        EvaluateLateToEarlyRmsGate(summary.sustained.late_to_early_rms_ratio) ? "pass" : "fail"
+    );
+    printf("  freq_drift_gate:        %s\n",
+        EvaluateDominantFrequencyDriftGate(summary.sustained.dominant_frequency_drift_hz) ? "pass" : "fail"
+    );
+    printf("  energy_drift_gate:      %s\n",
+        EvaluateEnergyDriftGate(summary.energy.final_energy - summary.energy.initial_energy) ? "pass" : "fail"
     );
     printf("\n");
 

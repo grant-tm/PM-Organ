@@ -45,6 +45,17 @@ typedef struct Fdtd1DAreaSegmentDesc
     f64 area_m2;
 } Fdtd1DAreaSegmentDesc;
 
+typedef struct Fdtd1DNonlinearMouthParameters
+{
+    f32 max_output;
+    f32 noise_scale;
+    f32 pressure_feedback;
+    f32 velocity_feedback;
+    f32 saturation_gain;
+    f32 drive_limit;
+    u32 delay_samples;
+} Fdtd1DNonlinearMouthParameters;
+
 typedef struct Fdtd1DDesc
 {
     u32 sample_rate;
@@ -111,6 +122,7 @@ typedef struct Fdtd1DState
     u32 *mouth_feedback_delay_lengths;
     u32 *mouth_feedback_delay_indices;
     u32 mouth_feedback_delay_capacity;
+    Fdtd1DNonlinearMouthParameters nonlinear_mouth;
 
     Fdtd1DBoundaryType left_boundary_type;
     Fdtd1DBoundaryType right_boundary_type;
@@ -140,6 +152,10 @@ bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc);
 bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *desc);
 void Fdtd1D_Shutdown (Fdtd1D *solver);
 void Fdtd1D_Reset (Fdtd1D *solver);
+bool Fdtd1D_SetNonlinearMouthParameters (
+    Fdtd1D *solver,
+    const Fdtd1DNonlinearMouthParameters *parameters
+);
 Simulation *Fdtd1D_GetSimulation (Fdtd1D *solver);
 const Fdtd1DState *Fdtd1D_GetState (const Fdtd1D *solver);
 
