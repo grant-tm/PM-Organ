@@ -256,38 +256,6 @@ static void UpdatePressureField (Fdtd1DState *state)
     }
 }
 
-static void ApplyPressureBoundaryConditions (Fdtd1DState *state)
-{
-    ASSERT(state != NULL);
-    ASSERT(state->pressure_cell_count > 0);
-
-    switch (state->left_boundary_type)
-    {
-        case FDTD_1D_BOUNDARY_TYPE_RIGID:
-        case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
-        {
-        } break;
-
-        case FDTD_1D_BOUNDARY_TYPE_OPEN:
-        {
-            state->pressure[0] = 0.0f;
-        } break;
-    }
-
-    switch (state->right_boundary_type)
-    {
-        case FDTD_1D_BOUNDARY_TYPE_RIGID:
-        case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
-        {
-        } break;
-
-        case FDTD_1D_BOUNDARY_TYPE_OPEN:
-        {
-            state->pressure[state->pressure_cell_count - 1] = 0.0f;
-        } break;
-    }
-}
-
 static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *process_context, Fdtd1DState *state)
 {
     u32 excitation_index;
@@ -431,7 +399,6 @@ static void ProcessBlockCallback (Simulation *simulation, SimulationProcessConte
     {
         UpdateVelocityField(state);
         UpdatePressureField(state);
-        ApplyPressureBoundaryConditions(state);
         ApplyExcitations(simulation, process_context, state);
         ReadProbes(process_context, state, frame_index);
     }
