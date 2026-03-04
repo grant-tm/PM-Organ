@@ -4,6 +4,10 @@
 #include "pm_organ/core/assert.h"
 #include "pm_organ/sim/fdtd_1d.h"
 
+static const f64 FDTD_1D_PI = 3.14159265358979323846;
+static const f64 OPEN_END_CORRECTION_COEFFICIENT = 0.61;
+static const f64 OPEN_END_MAX_RADIATION_LOSS = 0.25;
+
 static f64 AbsF64 (f64 value)
 {
     return (value < 0.0) ? -value : value;
@@ -164,6 +168,10 @@ static void ResetStateCallback (Simulation *simulation)
 
     memset(state->pressure, 0, sizeof(f32) * (usize) state->pressure_cell_count);
     memset(state->velocity, 0, sizeof(f32) * (usize) state->velocity_cell_count);
+    memset(state->left_open_delay_line, 0, sizeof(state->left_open_delay_line));
+    memset(state->right_open_delay_line, 0, sizeof(state->right_open_delay_line));
+    state->left_open_delay_write_index = 0;
+    state->right_open_delay_write_index = 0;
     state->noise_state = 0x13572468u;
 }
 
@@ -191,6 +199,57 @@ static void InjectDistributedPressureImpulse (Fdtd1DState *state, u32 cell_index
     state->pressure[cell_index] += amplitude;
 }
 
+static f32 SampleOpenBoundaryDelay (
+    const f32 *delay_line,
+    u32 write_index,
+    f32 delay_samples
+)
+{
+    f32 sample_a;
+    f32 sample_b;
+    f32 fractional_part;
+    u32 integer_delay;
+    usize index_a;
+    usize index_b;
+
+    ASSERT(delay_line != NULL);
+
+    if (delay_samples < 0.0f)
+    {
+        delay_samples = 0.0f;
+    }
+
+    integer_delay = (u32) delay_samples;
+    fractional_part = delay_samples - (f32) integer_delay;
+
+    if (integer_delay >= (FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY - 1))
+    {
+        integer_delay = FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY - 2;
+        fractional_part = 0.0f;
+    }
+
+    index_a =
+        ((usize) write_index + FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY - 1u - (usize) integer_delay) %
+        FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY;
+    index_b =
+        ((usize) write_index + FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY - 2u - (usize) integer_delay) %
+        FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY;
+
+    sample_a = delay_line[index_a];
+    sample_b = delay_line[index_b];
+
+    return sample_a + (sample_b - sample_a) * fractional_part;
+}
+
+static void PushOpenBoundaryDelaySample (f32 *delay_line, u32 *write_index, f32 sample)
+{
+    ASSERT(delay_line != NULL);
+    ASSERT(write_index != NULL);
+
+    delay_line[*write_index] = sample;
+    *write_index = (*write_index + 1) % FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY;
+}
+
 static void UpdateVelocityField (Fdtd1DState *state)
 {
     u32 velocity_index;
@@ -216,8 +275,28 @@ static void UpdateVelocityField (Fdtd1DState *state)
         case FDTD_1D_BOUNDARY_TYPE_OPEN:
         case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
         {
+            f32 reflected_pressure;
+
+            if (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
+            {
+                reflected_pressure = state->left_reflection_coefficient * SampleOpenBoundaryDelay(
+                    state->left_open_delay_line,
+                    state->left_open_delay_write_index,
+                    state->left_open_delay_samples
+                );
+                PushOpenBoundaryDelaySample(
+                    state->left_open_delay_line,
+                    &state->left_open_delay_write_index,
+                    state->pressure[0]
+                );
+            }
+            else
+            {
+                reflected_pressure = state->left_reflection_coefficient * state->pressure[0];
+            }
+
             state->velocity[0] -= state->velocity_update_coeff[0] *
-                (state->pressure[0] - state->left_reflection_coefficient * state->pressure[0]);
+                (state->pressure[0] - reflected_pressure);
             state->velocity[0] *= (1.0f - state->velocity_loss[0]);
         } break;
     }
@@ -232,10 +311,29 @@ static void UpdateVelocityField (Fdtd1DState *state)
         case FDTD_1D_BOUNDARY_TYPE_OPEN:
         case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
         {
+            f32 reflected_pressure;
+
+            if (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
+            {
+                reflected_pressure = state->right_reflection_coefficient * SampleOpenBoundaryDelay(
+                    state->right_open_delay_line,
+                    state->right_open_delay_write_index,
+                    state->right_open_delay_samples
+                );
+                PushOpenBoundaryDelaySample(
+                    state->right_open_delay_line,
+                    &state->right_open_delay_write_index,
+                    state->pressure[state->pressure_cell_count - 1]
+                );
+            }
+            else
+            {
+                reflected_pressure = state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1];
+            }
+
             state->velocity[state->velocity_cell_count - 1] -=
                 state->velocity_update_coeff[state->velocity_cell_count - 1] *
-                (state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1] -
-                 state->pressure[state->pressure_cell_count - 1]);
+                (reflected_pressure - state->pressure[state->pressure_cell_count - 1]);
             state->velocity[state->velocity_cell_count - 1] *=
                 (1.0f - state->velocity_loss[state->velocity_cell_count - 1]);
         } break;
@@ -517,7 +615,11 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     SimulationInterface simulation_interface;
     Fdtd1DState *state;
     f64 dt;
+    f64 end_correction_m;
+    f64 open_boundary_loss;
+    f64 pipe_radius_m;
     f64 pressure_update_coeff;
+    f64 reflection_magnitude;
     f64 velocity_update_coeff;
     u32 probe_index;
     u32 source_index;
@@ -645,6 +747,29 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     state->right_boundary_type = desc->right_boundary.type;
     state->left_reflection_coefficient = GetBoundaryReflectionCoefficient(&desc->left_boundary);
     state->right_reflection_coefficient = GetBoundaryReflectionCoefficient(&desc->right_boundary);
+
+    pipe_radius_m = sqrt(desc->uniform_area_m2 / FDTD_1D_PI);
+    end_correction_m = OPEN_END_CORRECTION_COEFFICIENT * pipe_radius_m;
+    open_boundary_loss = end_correction_m / (desc->tube_length_m + end_correction_m);
+    if (open_boundary_loss > OPEN_END_MAX_RADIATION_LOSS)
+    {
+        open_boundary_loss = OPEN_END_MAX_RADIATION_LOSS;
+    }
+
+    reflection_magnitude = 1.0 - open_boundary_loss;
+
+    state->left_open_delay_samples = (f32) (end_correction_m / (state->wave_speed_m_per_s * state->dt));
+    state->right_open_delay_samples = state->left_open_delay_samples;
+
+    if (desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)
+    {
+        state->left_reflection_coefficient = (f32) (-reflection_magnitude);
+    }
+
+    if (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)
+    {
+        state->right_reflection_coefficient = (f32) (-reflection_magnitude);
+    }
 
     solver->desc = *desc;
     solver->desc.courant_number = state->courant_number;
