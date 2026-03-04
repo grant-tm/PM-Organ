@@ -81,7 +81,7 @@ static void ConfigureSolver (
     desc->velocity_cell_count = 129;
     desc->courant_number = TEST_COURANT_NUMBER;
     desc->uniform_area_m2 = 0.01;
-    desc->uniform_loss = 0.0;
+    desc->uniform_loss = 0.00005;
     desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
     desc->left_boundary.reflection_coefficient = 1.0;
     desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;

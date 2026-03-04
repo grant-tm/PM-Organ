@@ -203,6 +203,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
     {
         state->velocity[velocity_index] -= state->velocity_update_coeff[velocity_index] *
             (state->pressure[velocity_index] - state->pressure[velocity_index - 1]);
+        state->velocity[velocity_index] *= (1.0f - state->velocity_loss[velocity_index]);
     }
 
     switch (state->left_boundary_type)
@@ -217,6 +218,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
         {
             state->velocity[0] -= state->velocity_update_coeff[0] *
                 (state->pressure[0] - state->left_reflection_coefficient * state->pressure[0]);
+            state->velocity[0] *= (1.0f - state->velocity_loss[0]);
         } break;
     }
 
@@ -234,6 +236,8 @@ static void UpdateVelocityField (Fdtd1DState *state)
                 state->velocity_update_coeff[state->velocity_cell_count - 1] *
                 (state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1] -
                  state->pressure[state->pressure_cell_count - 1]);
+            state->velocity[state->velocity_cell_count - 1] *=
+                (1.0f - state->velocity_loss[state->velocity_cell_count - 1]);
         } break;
     }
 }
@@ -248,6 +252,7 @@ static void UpdatePressureField (Fdtd1DState *state)
     {
         state->pressure[pressure_index] -= state->pressure_update_coeff[pressure_index] *
             (state->velocity[pressure_index + 1] - state->velocity[pressure_index]);
+        state->pressure[pressure_index] *= (1.0f - state->pressure_loss[pressure_index]);
     }
 }
 
@@ -458,7 +463,7 @@ bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc)
         return false;
     }
 
-    if (desc->uniform_loss < 0.0)
+    if ((desc->uniform_loss < 0.0) || (desc->uniform_loss > 1.0))
     {
         return false;
     }
