@@ -32,6 +32,13 @@ typedef struct EnergyResult
     f64 final_energy;
 } EnergyResult;
 
+typedef struct ArrivalSummary
+{
+    f64 expected_frame;
+    VerificationResult first_crossing;
+    WindowPeakResult main_lobe_peak;
+} ArrivalSummary;
+
 static void ConfigureSolver (
     Fdtd1DDesc *desc,
     Fdtd1DProbeDesc *probe_descs,
@@ -263,8 +270,8 @@ int main (int argc, char **argv)
     Simulation *simulation;
     SimulationExcitation excitation;
     SimulationOfflineCapture capture;
-    VerificationResult left_result;
-    VerificationResult right_result;
+    ArrivalSummary left_arrival;
+    ArrivalSummary right_arrival;
     WindowPeakResult left_reflection_window;
     WindowPeakResult right_reflection_window;
     const SimulationStats *stats;
@@ -384,8 +391,6 @@ int main (int argc, char **argv)
         }
     }
 
-    left_result = AnalyzeCapture(&capture, 0, FIRST_ARRIVAL_THRESHOLD);
-    right_result = AnalyzeCapture(&capture, 1, FIRST_ARRIVAL_THRESHOLD);
     stats = Simulation_GetStats(simulation);
 
     expected_left_arrival_seconds =
@@ -397,6 +402,22 @@ int main (int argc, char **argv)
 
     expected_left_arrival_frames = expected_left_arrival_seconds * (f64) solver_desc.sample_rate;
     expected_right_arrival_frames = expected_right_arrival_seconds * (f64) solver_desc.sample_rate;
+    left_arrival.expected_frame = expected_left_arrival_frames;
+    right_arrival.expected_frame = expected_right_arrival_frames;
+    left_arrival.first_crossing = AnalyzeCapture(&capture, 0, FIRST_ARRIVAL_THRESHOLD);
+    right_arrival.first_crossing = AnalyzeCapture(&capture, 1, FIRST_ARRIVAL_THRESHOLD);
+    left_arrival.main_lobe_peak = AnalyzeWindowPeak(
+        &capture,
+        0,
+        (u32) expected_left_arrival_frames - WINDOW_RADIUS,
+        (u32) expected_left_arrival_frames + WINDOW_RADIUS
+    );
+    right_arrival.main_lobe_peak = AnalyzeWindowPeak(
+        &capture,
+        1,
+        (u32) expected_right_arrival_frames - WINDOW_RADIUS,
+        (u32) expected_right_arrival_frames + WINDOW_RADIUS
+    );
     expected_left_reflection_frames =
         (f64) (source_descs[0].cell_index + probe_descs[0].cell_index);
     expected_right_reflection_frames =
@@ -435,36 +456,50 @@ int main (int argc, char **argv)
 
     printf("Direct Arrivals\n");
     printf("  left expected frame:    %.2f\n",
-        expected_left_arrival_frames
+        left_arrival.expected_frame
     );
     printf("  right expected frame:   %.2f\n",
-        expected_right_arrival_frames
+        right_arrival.expected_frame
     );
-    printf("  left first arrival:     ");
-    if (left_result.first_arrival_was_found)
+    printf("  left first crossing:    ");
+    if (left_arrival.first_crossing.first_arrival_was_found)
     {
-        printf("frame %u, value %.6f\n", left_result.first_arrival_frame, left_result.first_arrival_value);
+        printf(
+            "frame %u, value %.6f\n",
+            left_arrival.first_crossing.first_arrival_frame,
+            left_arrival.first_crossing.first_arrival_value
+        );
     }
     else
     {
         printf("not found\n");
     }
-    printf("  right first arrival:    ");
-    if (right_result.first_arrival_was_found)
+    printf("  left main-lobe peak:    frame %u, value %.6f, abs %.6f, window [%u, %u]\n",
+        left_arrival.main_lobe_peak.peak_frame,
+        left_arrival.main_lobe_peak.peak_value,
+        left_arrival.main_lobe_peak.peak_abs_value,
+        left_arrival.main_lobe_peak.start_frame,
+        left_arrival.main_lobe_peak.end_frame
+    );
+    printf("  right first crossing:   ");
+    if (right_arrival.first_crossing.first_arrival_was_found)
     {
-        printf("frame %u, value %.6f\n", right_result.first_arrival_frame, right_result.first_arrival_value);
+        printf(
+            "frame %u, value %.6f\n",
+            right_arrival.first_crossing.first_arrival_frame,
+            right_arrival.first_crossing.first_arrival_value
+        );
     }
     else
     {
         printf("not found\n");
     }
-    printf("  left peak:              frame %u, abs %.6f\n",
-        left_result.peak_frame,
-        left_result.peak_abs_sample
-    );
-    printf("  right peak:             frame %u, abs %.6f\n",
-        right_result.peak_frame,
-        right_result.peak_abs_sample
+    printf("  right main-lobe peak:   frame %u, value %.6f, abs %.6f, window [%u, %u]\n",
+        right_arrival.main_lobe_peak.peak_frame,
+        right_arrival.main_lobe_peak.peak_value,
+        right_arrival.main_lobe_peak.peak_abs_value,
+        right_arrival.main_lobe_peak.start_frame,
+        right_arrival.main_lobe_peak.end_frame
     );
     printf("\n");
 
