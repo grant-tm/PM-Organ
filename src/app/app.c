@@ -143,10 +143,12 @@ int App_Run (void)
         return 1;
     }
 
+    probe_descs[0].type = FDTD_1D_PROBE_TYPE_PRESSURE;
     probe_descs[0].cell_index = 96;
     probe_descs[0].output_channel_index = 0;
     probe_descs[0].is_enabled = true;
 
+    probe_descs[1].type = FDTD_1D_PROBE_TYPE_PRESSURE;
     probe_descs[1].cell_index = 112;
     probe_descs[1].output_channel_index = 1;
     probe_descs[1].is_enabled = true;

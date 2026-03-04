@@ -99,9 +99,28 @@ static bool ValidateProbeDescs (const Fdtd1DDesc *desc)
         const Fdtd1DProbeDesc *probe_desc;
 
         probe_desc = &desc->probe_descs[probe_index];
-        if (probe_desc->cell_index >= desc->pressure_cell_count)
+        switch (probe_desc->type)
         {
-            return false;
+            case FDTD_1D_PROBE_TYPE_PRESSURE:
+            {
+                if (probe_desc->cell_index >= desc->pressure_cell_count)
+                {
+                    return false;
+                }
+            } break;
+
+            case FDTD_1D_PROBE_TYPE_VELOCITY:
+            {
+                if (probe_desc->cell_index >= desc->velocity_cell_count)
+                {
+                    return false;
+                }
+            } break;
+
+            default:
+            {
+                return false;
+            } break;
         }
 
         if (probe_desc->output_channel_index >= desc->output_channel_count)
@@ -199,57 +218,6 @@ static void InjectDistributedPressureImpulse (Fdtd1DState *state, u32 cell_index
     state->pressure[cell_index] += amplitude;
 }
 
-static f32 SampleOpenBoundaryDelay (
-    const f32 *delay_line,
-    u32 write_index,
-    f32 delay_samples
-)
-{
-    f32 sample_a;
-    f32 sample_b;
-    f32 fractional_part;
-    u32 integer_delay;
-    usize index_a;
-    usize index_b;
-
-    ASSERT(delay_line != NULL);
-
-    if (delay_samples < 0.0f)
-    {
-        delay_samples = 0.0f;
-    }
-
-    integer_delay = (u32) delay_samples;
-    fractional_part = delay_samples - (f32) integer_delay;
-
-    if (integer_delay >= (FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY - 1))
-    {
-        integer_delay = FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY - 2;
-        fractional_part = 0.0f;
-    }
-
-    index_a =
-        ((usize) write_index + FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY - 1u - (usize) integer_delay) %
-        FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY;
-    index_b =
-        ((usize) write_index + FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY - 2u - (usize) integer_delay) %
-        FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY;
-
-    sample_a = delay_line[index_a];
-    sample_b = delay_line[index_b];
-
-    return sample_a + (sample_b - sample_a) * fractional_part;
-}
-
-static void PushOpenBoundaryDelaySample (f32 *delay_line, u32 *write_index, f32 sample)
-{
-    ASSERT(delay_line != NULL);
-    ASSERT(write_index != NULL);
-
-    delay_line[*write_index] = sample;
-    *write_index = (*write_index + 1) % FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY;
-}
-
 static void UpdateVelocityField (Fdtd1DState *state)
 {
     u32 velocity_index;
@@ -279,16 +247,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
 
             if (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
-                reflected_pressure = state->left_reflection_coefficient * SampleOpenBoundaryDelay(
-                    state->left_open_delay_line,
-                    state->left_open_delay_write_index,
-                    state->left_open_delay_samples
-                );
-                PushOpenBoundaryDelaySample(
-                    state->left_open_delay_line,
-                    &state->left_open_delay_write_index,
-                    state->pressure[0]
-                );
+                reflected_pressure = state->left_reflection_coefficient * state->pressure[0];
             }
             else
             {
@@ -315,16 +274,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
 
             if (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
-                reflected_pressure = state->right_reflection_coefficient * SampleOpenBoundaryDelay(
-                    state->right_open_delay_line,
-                    state->right_open_delay_write_index,
-                    state->right_open_delay_samples
-                );
-                PushOpenBoundaryDelaySample(
-                    state->right_open_delay_line,
-                    &state->right_open_delay_write_index,
-                    state->pressure[state->pressure_cell_count - 1]
-                );
+                reflected_pressure = state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1];
             }
             else
             {
@@ -456,7 +406,24 @@ static void ReadProbes (SimulationProcessContext *process_context, const Fdtd1DS
 
         cell_index = state->probe_cell_indices[probe_index];
         output_channel_index = state->probe_output_channels[probe_index];
-        sample_value = state->pressure[cell_index];
+        switch (state->probe_types[probe_index])
+        {
+            case FDTD_1D_PROBE_TYPE_PRESSURE:
+            {
+                sample_value = state->pressure[cell_index];
+            } break;
+
+            case FDTD_1D_PROBE_TYPE_VELOCITY:
+            {
+                sample_value = state->velocity[cell_index];
+            } break;
+
+            default:
+            {
+                ASSERT(false);
+                sample_value = 0.0f;
+            } break;
+        }
 
         if (process_context->probe_buffer != NULL)
         {
@@ -689,9 +656,12 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
 
     if (desc->probe_count > 0)
     {
+        state->probe_types = MEMORY_ARENA_PUSH_ARRAY(arena, desc->probe_count, Fdtd1DProbeType);
         state->probe_cell_indices = MEMORY_ARENA_PUSH_ARRAY(arena, desc->probe_count, u32);
         state->probe_output_channels = MEMORY_ARENA_PUSH_ARRAY(arena, desc->probe_count, u32);
-        if ((state->probe_cell_indices == NULL) || (state->probe_output_channels == NULL))
+        if ((state->probe_types == NULL) ||
+            (state->probe_cell_indices == NULL) ||
+            (state->probe_output_channels == NULL))
         {
             Simulation_Shutdown(&solver->simulation);
             return false;
@@ -724,6 +694,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     {
         SimulationProbe probe;
 
+        state->probe_types[probe_index] = desc->probe_descs[probe_index].type;
         state->probe_cell_indices[probe_index] = desc->probe_descs[probe_index].cell_index;
         state->probe_output_channels[probe_index] = desc->probe_descs[probe_index].output_channel_index;
 

@@ -57,12 +57,42 @@ typedef struct ModeResult
     f64 measured_peak_magnitude;
 } ModeResult;
 
+typedef enum VerificationExcitationType
+{
+    VERIFICATION_EXCITATION_TYPE_IMPULSE = 0,
+    VERIFICATION_EXCITATION_TYPE_NOISE_BURST,
+} VerificationExcitationType;
+
 typedef enum VerificationPreset
 {
     VERIFICATION_PRESET_RIGID_RIGID = 0,
     VERIFICATION_PRESET_OPEN_OPEN,
     VERIFICATION_PRESET_OPEN_RIGID,
 } VerificationPreset;
+
+typedef struct VerificationSettings
+{
+    VerificationPreset preset;
+    Fdtd1DProbeType probe_type;
+    VerificationExcitationType excitation_type;
+    const char *csv_output_path;
+    u32 block_count;
+    u32 source_cell_index;
+    u32 left_probe_index;
+    u32 right_probe_index;
+} VerificationSettings;
+
+static const char *GetProbeTypeName (Fdtd1DProbeType probe_type)
+{
+    switch (probe_type)
+    {
+        case FDTD_1D_PROBE_TYPE_PRESSURE: return "pressure";
+        case FDTD_1D_PROBE_TYPE_VELOCITY: return "velocity";
+    }
+
+    ASSERT(false);
+    return "unknown";
+}
 
 static const char *GetBoundaryTypeName (Fdtd1DBoundaryType boundary_type)
 {
@@ -116,8 +146,20 @@ static bool TryParsePresetName (const char *text, VerificationPreset *preset)
     return false;
 }
 
+static const char *GetExcitationTypeName (VerificationExcitationType excitation_type)
+{
+    switch (excitation_type)
+    {
+        case VERIFICATION_EXCITATION_TYPE_IMPULSE: return "impulse";
+        case VERIFICATION_EXCITATION_TYPE_NOISE_BURST: return "noise-burst";
+    }
+
+    ASSERT(false);
+    return "unknown";
+}
+
 static void ConfigureSolver (
-    VerificationPreset preset,
+    const VerificationSettings *settings,
     Fdtd1DDesc *desc,
     Fdtd1DProbeDesc *probe_descs,
     Fdtd1DSourceDesc *source_descs
@@ -125,19 +167,22 @@ static void ConfigureSolver (
 {
     static const f64 TEST_COURANT_NUMBER = 0.9;
 
+    ASSERT(settings != NULL);
     ASSERT(desc != NULL);
     ASSERT(probe_descs != NULL);
     ASSERT(source_descs != NULL);
 
-    probe_descs[0].cell_index = 96;
+    probe_descs[0].type = settings->probe_type;
+    probe_descs[0].cell_index = settings->left_probe_index;
     probe_descs[0].output_channel_index = 0;
     probe_descs[0].is_enabled = true;
 
-    probe_descs[1].cell_index = 112;
+    probe_descs[1].type = settings->probe_type;
+    probe_descs[1].cell_index = settings->right_probe_index;
     probe_descs[1].output_channel_index = 1;
     probe_descs[1].is_enabled = true;
 
-    source_descs[0].cell_index = 16;
+    source_descs[0].cell_index = settings->source_cell_index;
     source_descs[0].is_enabled = true;
 
     desc->sample_rate = 48000;
@@ -152,7 +197,7 @@ static void ConfigureSolver (
     desc->courant_number = TEST_COURANT_NUMBER;
     desc->uniform_area_m2 = 0.01;
     desc->uniform_loss = 0.00005;
-    switch (preset)
+    switch (settings->preset)
     {
         case VERIFICATION_PRESET_RIGID_RIGID:
         {
@@ -183,6 +228,145 @@ static void ConfigureSolver (
     desc->probe_descs = probe_descs;
     desc->source_count = 1;
     desc->source_descs = source_descs;
+}
+
+static bool TryParseProbeTypeName (const char *text, Fdtd1DProbeType *probe_type)
+{
+    ASSERT(text != NULL);
+    ASSERT(probe_type != NULL);
+
+    if (_stricmp(text, "pressure") == 0)
+    {
+        *probe_type = FDTD_1D_PROBE_TYPE_PRESSURE;
+        return true;
+    }
+
+    if (_stricmp(text, "velocity") == 0)
+    {
+        *probe_type = FDTD_1D_PROBE_TYPE_VELOCITY;
+        return true;
+    }
+
+    return false;
+}
+
+static bool TryParseExcitationTypeName (const char *text, VerificationExcitationType *excitation_type)
+{
+    ASSERT(text != NULL);
+    ASSERT(excitation_type != NULL);
+
+    if (_stricmp(text, "impulse") == 0)
+    {
+        *excitation_type = VERIFICATION_EXCITATION_TYPE_IMPULSE;
+        return true;
+    }
+
+    if ((_stricmp(text, "noise-burst") == 0) || (_stricmp(text, "noise") == 0))
+    {
+        *excitation_type = VERIFICATION_EXCITATION_TYPE_NOISE_BURST;
+        return true;
+    }
+
+    return false;
+}
+
+static bool TryParseUnsignedValue (const char *text, const char *prefix, u32 *value)
+{
+    usize prefix_length;
+    char *end_pointer;
+    unsigned long parsed_value;
+
+    ASSERT(text != NULL);
+    ASSERT(prefix != NULL);
+    ASSERT(value != NULL);
+
+    prefix_length = strlen(prefix);
+    if (_strnicmp(text, prefix, prefix_length) != 0)
+    {
+        return false;
+    }
+
+    parsed_value = strtoul(text + prefix_length, &end_pointer, 10);
+    if ((end_pointer == (text + prefix_length)) || (*end_pointer != '\0'))
+    {
+        return false;
+    }
+
+    *value = (u32) parsed_value;
+    return true;
+}
+
+static void InitializeVerificationSettings (VerificationSettings *settings)
+{
+    ASSERT(settings != NULL);
+
+    settings->preset = VERIFICATION_PRESET_RIGID_RIGID;
+    settings->probe_type = FDTD_1D_PROBE_TYPE_PRESSURE;
+    settings->excitation_type = VERIFICATION_EXCITATION_TYPE_IMPULSE;
+    settings->csv_output_path = NULL;
+    settings->block_count = 256;
+    settings->source_cell_index = 16;
+    settings->left_probe_index = 96;
+    settings->right_probe_index = 112;
+}
+
+static void ParseArguments (int argc, char **argv, VerificationSettings *settings)
+{
+    int argument_index;
+
+    ASSERT(settings != NULL);
+
+    for (argument_index = 1; argument_index < argc; argument_index += 1)
+    {
+        const char *argument;
+        u32 parsed_value;
+
+        argument = argv[argument_index];
+
+        if (TryParsePresetName(argument, &settings->preset))
+        {
+            continue;
+        }
+
+        if (TryParseProbeTypeName(argument, &settings->probe_type))
+        {
+            continue;
+        }
+
+        if (TryParseExcitationTypeName(argument, &settings->excitation_type))
+        {
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "blocks=", &parsed_value))
+        {
+            if (parsed_value > 0)
+            {
+                settings->block_count = parsed_value;
+            }
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "source=", &parsed_value))
+        {
+            settings->source_cell_index = parsed_value;
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "left_probe=", &parsed_value))
+        {
+            settings->left_probe_index = parsed_value;
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "right_probe=", &parsed_value))
+        {
+            settings->right_probe_index = parsed_value;
+            continue;
+        }
+
+        settings->csv_output_path = argument;
+    }
 }
 
 static bool WriteCaptureCsv (const char *path, const SimulationOfflineCapture *capture)
@@ -413,10 +597,18 @@ static f64 ComputeSpectrumMagnitude (
 
     for (frame_index = start_frame; frame_index <= end_frame; frame_index += 1)
     {
+        f64 sample_count;
         f64 sample;
+        f64 window;
         f64 phase;
 
+        sample_count = (f64) (end_frame - start_frame + 1);
         sample = (f64) capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        window = 0.5 - 0.5 * cos(
+            (2.0 * 3.14159265358979323846 * (f64) (frame_index - start_frame)) /
+            (sample_count - 1.0)
+        );
+        sample *= window;
         phase = 2.0 * 3.14159265358979323846 * frequency_hz * ((f64) frame_index / sample_rate);
 
         real_sum += sample * cos(phase);
@@ -549,13 +741,12 @@ static f64 ComputeStateEnergy (const Fdtd1DState *state)
 
 int main (int argc, char **argv)
 {
-    static const u32 BLOCK_COUNT = 256;
     static const f64 IMPULSE_AMPLITUDE = 0.25;
+    static const u32 NOISE_BURST_FRAME_COUNT = 128;
     static const f32 FIRST_ARRIVAL_THRESHOLD = 0.001f;
     static const u32 WINDOW_RADIUS = 4;
 
-    const char *csv_output_path;
-    VerificationPreset preset;
+    VerificationSettings settings;
     MemoryArena arena;
     Fdtd1D solver;
     Fdtd1DDesc solver_desc;
@@ -584,23 +775,10 @@ int main (int argc, char **argv)
     u32 block_index;
     int exit_code;
 
-    preset = VERIFICATION_PRESET_RIGID_RIGID;
-    csv_output_path = NULL;
-
-    if (argc >= 2)
-    {
-        if (TryParsePresetName(argv[1], &preset) == false)
-        {
-            csv_output_path = argv[1];
-        }
-    }
-
-    if (argc >= 3)
-    {
-        csv_output_path = argv[2];
-    }
-
     exit_code = 0;
+
+    InitializeVerificationSettings(&settings);
+    ParseArguments(argc, argv, &settings);
 
     memset(&arena, 0, sizeof(arena));
     memset(&solver, 0, sizeof(solver));
@@ -614,7 +792,7 @@ int main (int argc, char **argv)
         return 1;
     }
 
-    ConfigureSolver(preset, &solver_desc, probe_descs, source_descs);
+    ConfigureSolver(&settings, &solver_desc, probe_descs, source_descs);
 
     if (Fdtd1D_Initialize(&solver, &arena, &solver_desc) == false)
     {
@@ -626,7 +804,7 @@ int main (int argc, char **argv)
     simulation = Fdtd1D_GetSimulation(&solver);
 
     capture.channel_count = solver_desc.output_channel_count;
-    capture.frame_capacity = solver_desc.block_frame_count * BLOCK_COUNT;
+    capture.frame_capacity = solver_desc.block_frame_count * settings.block_count;
     capture.frame_count = 0;
     capture_sample_count = (usize) capture.frame_capacity * (usize) capture.channel_count;
     capture.samples = MEMORY_ARENA_PUSH_ARRAY(&arena, capture_sample_count, f32);
@@ -639,9 +817,15 @@ int main (int argc, char **argv)
         return 1;
     }
 
-    excitation.type = SIMULATION_EXCITATION_TYPE_IMPULSE;
+    excitation.type =
+        (settings.excitation_type == VERIFICATION_EXCITATION_TYPE_NOISE_BURST) ?
+        SIMULATION_EXCITATION_TYPE_NOISE :
+        SIMULATION_EXCITATION_TYPE_IMPULSE;
     excitation.target_index = 0;
-    excitation.remaining_frame_count = 1;
+    excitation.remaining_frame_count =
+        (settings.excitation_type == VERIFICATION_EXCITATION_TYPE_NOISE_BURST) ?
+        NOISE_BURST_FRAME_COUNT :
+        1;
     excitation.value = IMPULSE_AMPLITUDE;
     excitation.is_active = true;
 
@@ -658,7 +842,7 @@ int main (int argc, char **argv)
     energy.maximum_energy = 0.0;
     energy.final_energy = 0.0;
 
-    for (block_index = 0; block_index < BLOCK_COUNT; block_index += 1)
+    for (block_index = 0; block_index < settings.block_count; block_index += 1)
     {
         if (Simulation_ProcessBlock(simulation) == false)
         {
@@ -773,7 +957,7 @@ int main (int argc, char **argv)
 
     printf("Setup\n");
     printf("  preset:                 %s\n",
-        GetPresetName(preset)
+        GetPresetName(settings.preset)
     );
     printf("  sample_rate:            %u\n",
         solver_desc.sample_rate
@@ -792,6 +976,21 @@ int main (int argc, char **argv)
     );
     printf("  right_boundary:         %s\n",
         GetBoundaryTypeName(solver_desc.right_boundary.type)
+    );
+    printf("  probe_type:            %s\n",
+        GetProbeTypeName(settings.probe_type)
+    );
+    printf("  excitation:            %s\n",
+        GetExcitationTypeName(settings.excitation_type)
+    );
+    printf("  source_index:          %u\n",
+        settings.source_cell_index
+    );
+    printf("  left_probe_index:      %u\n",
+        settings.left_probe_index
+    );
+    printf("  right_probe_index:     %u\n",
+        settings.right_probe_index
     );
     printf("\n");
 
@@ -937,15 +1136,15 @@ int main (int argc, char **argv)
     }
     printf("\n");
 
-    if (csv_output_path != NULL)
+    if (settings.csv_output_path != NULL)
     {
-        if (WriteCaptureCsv(csv_output_path, &capture))
+        if (WriteCaptureCsv(settings.csv_output_path, &capture))
         {
-            printf("csv_written=%s\n", csv_output_path);
+            printf("csv_written=%s\n", settings.csv_output_path);
         }
         else
         {
-            fprintf(stderr, "Failed to write CSV output: %s\n", csv_output_path);
+            fprintf(stderr, "Failed to write CSV output: %s\n", settings.csv_output_path);
             exit_code = 1;
         }
     }

@@ -20,8 +20,15 @@ typedef struct Fdtd1DBoundaryDesc
     f64 reflection_coefficient;
 } Fdtd1DBoundaryDesc;
 
+typedef enum Fdtd1DProbeType
+{
+    FDTD_1D_PROBE_TYPE_PRESSURE = 0,
+    FDTD_1D_PROBE_TYPE_VELOCITY,
+} Fdtd1DProbeType;
+
 typedef struct Fdtd1DProbeDesc
 {
+    Fdtd1DProbeType type;
     u32 cell_index;
     u32 output_channel_index;
     bool is_enabled;
@@ -86,6 +93,7 @@ typedef struct Fdtd1DState
     f32 *pressure_update_coeff;
     f32 *velocity_update_coeff;
 
+    Fdtd1DProbeType *probe_types;
     u32 *probe_cell_indices;
     u32 *probe_output_channels;
 
