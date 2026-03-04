@@ -571,12 +571,13 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->preset = VERIFICATION_PRESET_RIGID_RIGID;
     settings->probe_type = FDTD_1D_PROBE_TYPE_PRESSURE;
     settings->excitation_type = VERIFICATION_EXCITATION_TYPE_IMPULSE;
-    settings->nonlinear_mouth_parameters.max_output = 0.0012f;
+    settings->nonlinear_mouth_parameters.max_output = 0.0002f;
     settings->nonlinear_mouth_parameters.noise_scale = 0.04f;
-    settings->nonlinear_mouth_parameters.pressure_feedback = 0.45f;
-    settings->nonlinear_mouth_parameters.velocity_feedback = 0.12f;
+    settings->nonlinear_mouth_parameters.pressure_feedback = 0.35f;
+    settings->nonlinear_mouth_parameters.velocity_feedback = 0.10f;
+    settings->nonlinear_mouth_parameters.feedback_leak = 0.60f;
     settings->nonlinear_mouth_parameters.saturation_gain = 80.0f;
-    settings->nonlinear_mouth_parameters.drive_limit = 0.002f;
+    settings->nonlinear_mouth_parameters.drive_limit = 0.0005f;
     settings->nonlinear_mouth_parameters.delay_samples = 8;
     settings->csv_output_path = NULL;
     settings->source_index_was_overridden = false;
@@ -729,6 +730,12 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         if (TryParseDoubleValue(argument, "mouth_velocity_feedback=", &parsed_f64))
         {
             settings->nonlinear_mouth_parameters.velocity_feedback = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "mouth_feedback_leak=", &parsed_f64))
+        {
+            settings->nonlinear_mouth_parameters.feedback_leak = (f32) parsed_f64;
             continue;
         }
 
@@ -1697,6 +1704,7 @@ int main (int argc, char **argv)
         printf("  feedback_scale_step:    %.3f\n", settings.nonlinear_mouth_feedback_scale_step);
         printf("  mouth_max_output:       %.6f\n", settings.nonlinear_mouth_parameters.max_output);
         printf("  mouth_noise_scale:      %.6f\n", settings.nonlinear_mouth_parameters.noise_scale);
+        printf("  mouth_feedback_leak:    %.6f\n", settings.nonlinear_mouth_parameters.feedback_leak);
         printf("  mouth_saturation_gain:  %.3f\n", settings.nonlinear_mouth_parameters.saturation_gain);
         printf("  mouth_drive_limit:      %.6f\n", settings.nonlinear_mouth_parameters.drive_limit);
         printf("  mouth_delay:            %u\n", settings.nonlinear_mouth_parameters.delay_samples);
@@ -1817,6 +1825,9 @@ int main (int argc, char **argv)
     );
     printf("  excitation:            %s\n",
         GetExcitationTypeName(settings.excitation_type)
+    );
+    printf("  mouth_feedback_leak:   %.6f\n",
+        settings.nonlinear_mouth_parameters.feedback_leak
     );
     printf("  source_index:          %u\n",
         source_descs[0].cell_index

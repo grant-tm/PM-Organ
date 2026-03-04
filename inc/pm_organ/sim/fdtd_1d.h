@@ -51,6 +51,7 @@ typedef struct Fdtd1DNonlinearMouthParameters
     f32 noise_scale;
     f32 pressure_feedback;
     f32 velocity_feedback;
+    f32 feedback_leak;
     f32 saturation_gain;
     f32 drive_limit;
     u32 delay_samples;

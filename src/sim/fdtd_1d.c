@@ -10,12 +10,13 @@ static const f64 OPEN_END_RADIATION_RESISTANCE_SCALE = 1.5;
 static const u32 NONLINEAR_MOUTH_MAX_DELAY_SAMPLES = 64;
 static const Fdtd1DNonlinearMouthParameters DEFAULT_NONLINEAR_MOUTH_PARAMETERS =
 {
-    0.0012f, /* max_output */
+    0.0002f, /* max_output */
     0.04f,   /* noise_scale */
-    0.45f,   /* pressure_feedback */
-    0.12f,   /* velocity_feedback */
+    0.35f,   /* pressure_feedback */
+    0.10f,   /* velocity_feedback */
+    0.60f,   /* feedback_leak */
     80.0f,   /* saturation_gain */
-    0.002f,  /* drive_limit */
+    0.0005f, /* drive_limit */
     8u       /* delay_samples */
 };
 
@@ -295,6 +296,11 @@ static bool ValidateNonlinearMouthParameters (const Fdtd1DNonlinearMouthParamete
         return false;
     }
 
+    if ((parameters->feedback_leak < 0.0f) || (parameters->feedback_leak >= 1.0f))
+    {
+        return false;
+    }
+
     if (parameters->saturation_gain <= 0.0f)
     {
         return false;
@@ -384,14 +390,15 @@ static f32 ComputeNonlinearMouthExcitation (
         ((usize) source_index * (usize) state->mouth_feedback_delay_capacity);
     delay_index = state->mouth_feedback_delay_indices[source_index];
     delayed_feedback = delay_buffer[delay_index];
-    delay_buffer[delay_index] = feedback_signal;
+    delay_buffer[delay_index] =
+        feedback_signal + (state->nonlinear_mouth.feedback_leak * delayed_feedback);
     state->mouth_feedback_delay_indices[source_index] =
         (delay_index + 1) % state->mouth_feedback_delay_lengths[source_index];
 
     mouth_input =
         wind_drive +
         (wind_drive * state->nonlinear_mouth.noise_scale * NextNoiseSample(state)) -
-        delayed_feedback;
+        ClampF32(delayed_feedback, -4.0f * state->nonlinear_mouth.drive_limit, 4.0f * state->nonlinear_mouth.drive_limit);
 
     return state->nonlinear_mouth.max_output * tanhf(state->nonlinear_mouth.saturation_gain * mouth_input);
 }
