@@ -8,15 +8,23 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 add_executable(pm_organ WIN32
     src/app/app.c
+    src/audio/audio_device.c
     src/app/main.c
     src/core/frame_timer.c
     src/core/memory_arena.c
+    src/platform/win32/audio_device_wasapi.c
     src/platform/win32/time_win32.c
     src/platform/win32/window_win32.c
 )
 
 target_include_directories(pm_organ PRIVATE
     inc
+)
+
+target_link_libraries(pm_organ PRIVATE
+    avrt
+    ole32
+    uuid
 )
 
 target_compile_definitions(pm_organ PRIVATE
