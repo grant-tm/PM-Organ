@@ -1,12 +1,58 @@
 #include <math.h>
+#include <string.h>
 
 #include "pm_organ/audio/audio_engine.h"
 #include "pm_organ/core/assert.h"
 
 static const f64 PI64 = 3.14159265358979323846;
 
+static void RenderTestSource (
+    void *user_data,
+    f32 *output,
+    f32 *scratch_buffer,
+    u32 block_frame_count,
+    u32 channel_count,
+    u32 sample_rate
+)
+{
+    AudioEngine *engine;
+    u32 frame_index;
+
+    ASSERT(user_data != NULL);
+    ASSERT(output != NULL);
+    ASSERT(scratch_buffer != NULL);
+    ASSERT(block_frame_count > 0);
+    ASSERT(channel_count > 0);
+    ASSERT(sample_rate > 0);
+
+    engine = (AudioEngine *) user_data;
+
+    memset(scratch_buffer, 0, sizeof(f32) * (usize) block_frame_count);
+
+    for (frame_index = 0; frame_index < block_frame_count; frame_index += 1)
+    {
+        f32 sample_value;
+        u32 channel_index;
+
+        sample_value = (f32) (0.05 * sin(engine->test_sine_phase));
+        engine->test_sine_phase += (2.0 * PI64 * 220.0) / (f64) sample_rate;
+
+        if (engine->test_sine_phase >= 2.0 * PI64)
+        {
+            engine->test_sine_phase -= 2.0 * PI64;
+        }
+
+        for (channel_index = 0; channel_index < channel_count; channel_index += 1)
+        {
+            output[frame_index * channel_count + channel_index] = sample_value;
+        }
+    }
+}
+
 bool AudioEngine_Initialize (AudioEngine *engine, MemoryArena *arena, const AudioEngineDesc *desc)
 {
+    usize mix_sample_count;
+
     ASSERT(engine != NULL);
     ASSERT(arena != NULL);
     ASSERT(desc != NULL);
@@ -14,9 +60,22 @@ bool AudioEngine_Initialize (AudioEngine *engine, MemoryArena *arena, const Audi
     ASSERT(desc->channel_count > 0);
     ASSERT(desc->block_frame_count > 0);
 
-    (void) arena;
-
     engine->config = *desc;
+    mix_sample_count = (usize) desc->block_frame_count * (usize) desc->channel_count;
+
+    engine->mix_buffer = MEMORY_ARENA_PUSH_ARRAY(arena, mix_sample_count, f32);
+    engine->scratch_buffer = MEMORY_ARENA_PUSH_ARRAY(
+        arena,
+        (usize) desc->block_frame_count * (usize) desc->channel_count,
+        f32
+    );
+    if ((engine->mix_buffer == NULL) || (engine->scratch_buffer == NULL))
+    {
+        return false;
+    }
+
+    engine->simulation_render_callback = RenderTestSource;
+    engine->simulation_user_data = engine;
     engine->test_sine_phase = 0.0;
 
     return true;
@@ -29,35 +88,54 @@ void AudioEngine_Shutdown (AudioEngine *engine)
     engine->config.sample_rate = 0;
     engine->config.channel_count = 0;
     engine->config.block_frame_count = 0;
+    engine->simulation_render_callback = NULL;
+    engine->simulation_user_data = NULL;
+    engine->mix_buffer = NULL;
+    engine->scratch_buffer = NULL;
     engine->test_sine_phase = 0.0;
 }
 
 void AudioEngine_RenderBlock (AudioEngine *engine, f32 *output)
 {
-    u32 frame_index;
+    usize mix_byte_count;
+    usize scratch_byte_count;
 
     ASSERT(engine != NULL);
     ASSERT(output != NULL);
     ASSERT(engine->config.sample_rate > 0);
     ASSERT(engine->config.channel_count > 0);
     ASSERT(engine->config.block_frame_count > 0);
+    ASSERT(engine->mix_buffer != NULL);
+    ASSERT(engine->scratch_buffer != NULL);
+    ASSERT(engine->simulation_render_callback != NULL);
 
-    for (frame_index = 0; frame_index < engine->config.block_frame_count; frame_index += 1)
-    {
-        f32 sample_value;
-        u32 channel_index;
+    mix_byte_count = sizeof(f32) * (usize) engine->config.block_frame_count * (usize) engine->config.channel_count;
+    scratch_byte_count = sizeof(f32) * (usize) engine->config.block_frame_count * (usize) engine->config.channel_count;
 
-        sample_value = (f32) (0.05 * sin(engine->test_sine_phase));
-        engine->test_sine_phase += (2.0 * PI64 * 220.0) / (f64) engine->config.sample_rate;
+    memset(engine->mix_buffer, 0, mix_byte_count);
+    memset(engine->scratch_buffer, 0, scratch_byte_count);
 
-        if (engine->test_sine_phase >= 2.0 * PI64)
-        {
-            engine->test_sine_phase -= 2.0 * PI64;
-        }
+    engine->simulation_render_callback(
+        engine->simulation_user_data,
+        engine->mix_buffer,
+        engine->scratch_buffer,
+        engine->config.block_frame_count,
+        engine->config.channel_count,
+        engine->config.sample_rate
+    );
 
-        for (channel_index = 0; channel_index < engine->config.channel_count; channel_index += 1)
-        {
-            output[frame_index * engine->config.channel_count + channel_index] = sample_value;
-        }
-    }
+    memcpy(output, engine->mix_buffer, mix_byte_count);
+}
+
+void AudioEngine_SetSimulationRenderer (
+    AudioEngine *engine,
+    AudioEngineSimulationRenderCallback *render_callback,
+    void *user_data
+)
+{
+    ASSERT(engine != NULL);
+    ASSERT(render_callback != NULL);
+
+    engine->simulation_render_callback = render_callback;
+    engine->simulation_user_data = user_data;
 }
