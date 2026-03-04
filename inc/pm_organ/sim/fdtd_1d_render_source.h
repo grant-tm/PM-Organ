@@ -5,9 +5,16 @@
 #include "pm_organ/core/types.h"
 #include "pm_organ/sim/fdtd_1d.h"
 
+typedef enum Fdtd1DOutputExtractionMode
+{
+    FDTD_1D_OUTPUT_EXTRACTION_MODE_RAW_PROBES = 0,
+    FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION,
+} Fdtd1DOutputExtractionMode;
+
 typedef struct Fdtd1DRenderSourceDesc
 {
     Fdtd1DDesc solver_desc;
+    Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_enabled;
     u32 startup_impulse_target_index;
     f64 startup_impulse_amplitude;
@@ -16,6 +23,7 @@ typedef struct Fdtd1DRenderSourceDesc
 typedef struct Fdtd1DRenderSource
 {
     Fdtd1D solver;
+    Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_pending;
     u32 startup_impulse_target_index;
     f64 startup_impulse_amplitude;
@@ -28,6 +36,10 @@ bool Fdtd1DRenderSource_Initialize (
 );
 void Fdtd1DRenderSource_Shutdown (Fdtd1DRenderSource *source);
 void Fdtd1DRenderSource_TriggerStartupImpulse (Fdtd1DRenderSource *source);
+void Fdtd1DRenderSource_SetOutputExtractionMode (
+    Fdtd1DRenderSource *source,
+    Fdtd1DOutputExtractionMode output_extraction_mode
+);
 void Fdtd1DRenderSource_Render (
     void *user_data,
     f32 *output,

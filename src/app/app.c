@@ -24,6 +24,13 @@ typedef enum FdtdPresetType
     FDTD_PRESET_TYPE_COUNT,
 } FdtdPresetType;
 
+typedef enum AppOutputExtractionMode
+{
+    APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES = 0,
+    APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION,
+    APP_OUTPUT_EXTRACTION_MODE_COUNT,
+} AppOutputExtractionMode;
+
 typedef struct AppState
 {
     AudioDevice audio_device;
@@ -34,11 +41,25 @@ typedef struct AppState
     Window main_window;
     TestToneSource test_tone_source;
     FdtdPresetType active_fdtd_preset;
+    AppOutputExtractionMode active_output_extraction_mode;
     bool fdtd_source_is_active;
     bool previous_space_is_down;
     bool previous_toggle_is_down;
     bool previous_cycle_is_down;
 } AppState;
+
+static Fdtd1DOutputExtractionMode ToRenderSourceOutputExtractionMode (AppOutputExtractionMode app_mode)
+{
+    switch (app_mode)
+    {
+        case APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES: return FDTD_1D_OUTPUT_EXTRACTION_MODE_RAW_PROBES;
+        case APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION: return FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
+        case APP_OUTPUT_EXTRACTION_MODE_COUNT: break;
+    }
+
+    ASSERT(false);
+    return FDTD_1D_OUTPUT_EXTRACTION_MODE_RAW_PROBES;
+}
 
 static const char *GetFdtdPresetName (FdtdPresetType preset_type)
 {
@@ -49,6 +70,19 @@ static const char *GetFdtdPresetName (FdtdPresetType preset_type)
         case FDTD_PRESET_TYPE_WIDE_MOUTH_STOPPED: return "Wide Mouth";
         case FDTD_PRESET_TYPE_OPEN_PIPE: return "Open Pipe";
         case FDTD_PRESET_TYPE_COUNT: break;
+    }
+
+    ASSERT(false);
+    return "Unknown";
+}
+
+static const char *GetOutputExtractionModeName (AppOutputExtractionMode output_extraction_mode)
+{
+    switch (output_extraction_mode)
+    {
+        case APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES: return "Raw Probes";
+        case APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION: return "Mouth Radiation";
+        case APP_OUTPUT_EXTRACTION_MODE_COUNT: break;
     }
 
     ASSERT(false);
@@ -93,6 +127,26 @@ static void BuildFdtdPresetDesc (
     probe_descs[1].output_channel_index = 1;
     probe_descs[1].is_enabled = true;
 
+    probe_descs[2].type = FDTD_1D_PROBE_TYPE_PRESSURE;
+    probe_descs[2].cell_index = 0;
+    probe_descs[2].output_channel_index = 0;
+    probe_descs[2].is_enabled = true;
+
+    probe_descs[3].type = FDTD_1D_PROBE_TYPE_VELOCITY;
+    probe_descs[3].cell_index = 0;
+    probe_descs[3].output_channel_index = 0;
+    probe_descs[3].is_enabled = true;
+
+    probe_descs[4].type = FDTD_1D_PROBE_TYPE_PRESSURE;
+    probe_descs[4].cell_index = 127;
+    probe_descs[4].output_channel_index = 1;
+    probe_descs[4].is_enabled = true;
+
+    probe_descs[5].type = FDTD_1D_PROBE_TYPE_VELOCITY;
+    probe_descs[5].cell_index = 128;
+    probe_descs[5].output_channel_index = 1;
+    probe_descs[5].is_enabled = true;
+
     source_descs[0].cell_index = 24;
     source_descs[0].is_enabled = true;
 
@@ -113,10 +167,11 @@ static void BuildFdtdPresetDesc (
     render_source_desc->solver_desc.left_boundary.reflection_coefficient = -1.0;
     render_source_desc->solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
     render_source_desc->solver_desc.right_boundary.reflection_coefficient = 1.0;
-    render_source_desc->solver_desc.probe_count = 2;
+    render_source_desc->solver_desc.probe_count = 6;
     render_source_desc->solver_desc.probe_descs = probe_descs;
     render_source_desc->solver_desc.source_count = 1;
     render_source_desc->solver_desc.source_descs = source_descs;
+    render_source_desc->output_extraction_mode = FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     render_source_desc->startup_impulse_is_enabled = true;
     render_source_desc->startup_impulse_target_index = 0;
     render_source_desc->startup_impulse_amplitude = 0.25;
@@ -189,6 +244,21 @@ static void SetActiveRenderSource (AppState *app, bool use_fdtd_source)
     UpdateWindowTitle(app);
 }
 
+static void ApplyOutputExtractionModeToSources (AppState *app)
+{
+    FdtdPresetType preset_type;
+
+    ASSERT(app != NULL);
+
+    for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+    {
+        Fdtd1DRenderSource_SetOutputExtractionMode(
+            &app->fdtd_render_sources[preset_type],
+            ToRenderSourceOutputExtractionMode(app->active_output_extraction_mode)
+        );
+    }
+}
+
 static void CycleFdtdPreset (AppState *app)
 {
     ASSERT(app != NULL);
@@ -224,6 +294,15 @@ static void SelectFdtdPreset (AppState *app, FdtdPresetType preset_type)
 
     Fdtd1DRenderSource_TriggerStartupImpulse(&app->fdtd_render_sources[app->active_fdtd_preset]);
     UpdateWindowTitle(app);
+}
+
+static void SelectOutputExtractionMode (AppState *app, AppOutputExtractionMode output_extraction_mode)
+{
+    ASSERT(app != NULL);
+    ASSERT(output_extraction_mode < APP_OUTPUT_EXTRACTION_MODE_COUNT);
+
+    app->active_output_extraction_mode = output_extraction_mode;
+    ApplyOutputExtractionModeToSources(app);
 }
 
 static void UpdateDebugInput (AppState *app)
@@ -342,7 +421,7 @@ int App_Run (void)
     for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
     {
         Fdtd1DAreaSegmentDesc area_segment_descs[2];
-        Fdtd1DProbeDesc probe_descs[2];
+        Fdtd1DProbeDesc probe_descs[6];
         Fdtd1DRenderSourceDesc fdtd_render_source_desc;
         Fdtd1DSourceDesc source_descs[1];
         u32 area_segment_count;
@@ -396,6 +475,8 @@ int App_Run (void)
     app->previous_toggle_is_down = false;
     app->previous_cycle_is_down = false;
     app->active_fdtd_preset = FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED;
+    app->active_output_extraction_mode = APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
+    ApplyOutputExtractionModeToSources(app);
     SetActiveRenderSource(app, true);
 
     audio_desc.sample_rate = 48000;
@@ -426,6 +507,7 @@ int App_Run (void)
     {
         DebugGuiFrameActions gui_actions;
         DebugGuiFrameDesc gui_frame_desc;
+        const char *output_extraction_mode_names[APP_OUTPUT_EXTRACTION_MODE_COUNT];
         const char *preset_names[FDTD_PRESET_TYPE_COUNT];
 
         FrameTimer_BeginFrame(&app->frame_timer);
@@ -436,10 +518,15 @@ int App_Run (void)
         {
             preset_names[preset_type] = GetFdtdPresetName(preset_type);
         }
+        output_extraction_mode_names[0] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES);
+        output_extraction_mode_names[1] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION);
 
         gui_frame_desc.fdtd_source_is_active = app->fdtd_source_is_active;
         gui_frame_desc.active_preset_index = app->active_fdtd_preset;
+        gui_frame_desc.active_output_extraction_mode = app->active_output_extraction_mode;
+        gui_frame_desc.output_extraction_mode_count = APP_OUTPUT_EXTRACTION_MODE_COUNT;
         gui_frame_desc.preset_count = FDTD_PRESET_TYPE_COUNT;
+        gui_frame_desc.output_extraction_mode_names = output_extraction_mode_names;
         gui_frame_desc.preset_names = preset_names;
         gui_frame_desc.delta_seconds = app->frame_timer.delta_seconds;
 
@@ -459,6 +546,11 @@ int App_Run (void)
         if (gui_actions.request_select_preset)
         {
             SelectFdtdPreset(app, (FdtdPresetType) gui_actions.selected_preset_index);
+        }
+
+        if (gui_actions.request_select_output_extraction_mode)
+        {
+            SelectOutputExtractionMode(app, (AppOutputExtractionMode) gui_actions.selected_output_extraction_mode);
         }
 
         if (gui_actions.request_trigger_impulse)

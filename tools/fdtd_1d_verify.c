@@ -80,11 +80,38 @@ typedef struct VerificationSettings
     Fdtd1DProbeType probe_type;
     VerificationExcitationType excitation_type;
     const char *csv_output_path;
+    bool source_index_was_overridden;
+    bool left_probe_index_was_overridden;
+    bool right_probe_index_was_overridden;
+    bool run_length_sweep;
     u32 block_count;
+    u32 length_sweep_start_cell_count;
+    u32 length_sweep_end_cell_count;
+    u32 length_sweep_step_cell_count;
+    u32 pressure_cell_count;
     u32 source_cell_index;
     u32 left_probe_index;
     u32 right_probe_index;
 } VerificationSettings;
+
+typedef struct VerificationRunSummary
+{
+    ModeResult mode_results[MODE_COUNT];
+    EnergyResult energy;
+    SimulationStats stats;
+    u32 pressure_cell_count;
+    f64 tube_length_m;
+} VerificationRunSummary;
+
+typedef struct LengthSweepResult
+{
+    u32 pressure_cell_count;
+    f64 tube_length_m;
+    f64 expected_fundamental_hz;
+    f64 measured_fundamental_hz;
+    f64 measured_fundamental_magnitude;
+    f64 final_energy_drift;
+} LengthSweepResult;
 
 static const char *GetProbeTypeName (Fdtd1DProbeType probe_type)
 {
@@ -199,6 +226,13 @@ static void ConfigureSolver (
 )
 {
     static const f64 TEST_COURANT_NUMBER = 0.9;
+    static const f64 DEFAULT_SOURCE_RATIO = 24.0 / 128.0;
+    static const f64 DEFAULT_LEFT_PROBE_RATIO = 72.0 / 128.0;
+    static const f64 DEFAULT_RIGHT_PROBE_RATIO = 104.0 / 128.0;
+    u32 pressure_cell_count;
+    u32 source_cell_index;
+    u32 left_probe_index;
+    u32 right_probe_index;
 
     ASSERT(settings != NULL);
     ASSERT(desc != NULL);
@@ -206,28 +240,54 @@ static void ConfigureSolver (
     ASSERT(probe_descs != NULL);
     ASSERT(source_descs != NULL);
 
+    pressure_cell_count = settings->pressure_cell_count;
+    source_cell_index = settings->source_index_was_overridden ?
+        settings->source_cell_index :
+        (u32) (DEFAULT_SOURCE_RATIO * (f64) pressure_cell_count);
+    left_probe_index = settings->left_probe_index_was_overridden ?
+        settings->left_probe_index :
+        (u32) (DEFAULT_LEFT_PROBE_RATIO * (f64) pressure_cell_count);
+    right_probe_index = settings->right_probe_index_was_overridden ?
+        settings->right_probe_index :
+        (u32) (DEFAULT_RIGHT_PROBE_RATIO * (f64) pressure_cell_count);
+
+    if (source_cell_index >= pressure_cell_count)
+    {
+        source_cell_index = pressure_cell_count - 1;
+    }
+
+    if (left_probe_index >= pressure_cell_count)
+    {
+        left_probe_index = pressure_cell_count - 1;
+    }
+
+    if (right_probe_index >= pressure_cell_count)
+    {
+        right_probe_index = pressure_cell_count - 1;
+    }
+
     probe_descs[0].type = settings->probe_type;
-    probe_descs[0].cell_index = settings->left_probe_index;
+    probe_descs[0].cell_index = left_probe_index;
     probe_descs[0].output_channel_index = 0;
     probe_descs[0].is_enabled = true;
 
     probe_descs[1].type = settings->probe_type;
-    probe_descs[1].cell_index = settings->right_probe_index;
+    probe_descs[1].cell_index = right_probe_index;
     probe_descs[1].output_channel_index = 1;
     probe_descs[1].is_enabled = true;
 
-    source_descs[0].cell_index = settings->source_cell_index;
+    source_descs[0].cell_index = source_cell_index;
     source_descs[0].is_enabled = true;
 
     desc->sample_rate = 48000;
     desc->block_frame_count = 64;
     desc->output_channel_count = 2;
-    desc->tube_length_m = 128.0 * (343.0 / (TEST_COURANT_NUMBER * 48000.0));
+    desc->tube_length_m = (f64) pressure_cell_count * (343.0 / (TEST_COURANT_NUMBER * 48000.0));
     desc->wave_speed_m_per_s = 343.0;
     desc->density_kg_per_m3 = 1.225;
     desc->dx = 343.0 / (TEST_COURANT_NUMBER * 48000.0);
-    desc->pressure_cell_count = 128;
-    desc->velocity_cell_count = 129;
+    desc->pressure_cell_count = pressure_cell_count;
+    desc->velocity_cell_count = pressure_cell_count + 1;
     desc->courant_number = TEST_COURANT_NUMBER;
     desc->uniform_area_m2 = 0.01;
     desc->uniform_loss = 0.00005;
@@ -298,10 +358,10 @@ static void ConfigureSolver (
         case VERIFICATION_PRESET_STAGE2_OPEN_PIPE:
         {
             area_segment_descs[0].start_cell_index = 0;
-            area_segment_descs[0].end_cell_index = 16;
+            area_segment_descs[0].end_cell_index = pressure_cell_count / 8;
             area_segment_descs[0].area_m2 = 0.012;
-            area_segment_descs[1].start_cell_index = 112;
-            area_segment_descs[1].end_cell_index = 128;
+            area_segment_descs[1].start_cell_index = pressure_cell_count - (pressure_cell_count / 8);
+            area_segment_descs[1].end_cell_index = pressure_cell_count;
             area_segment_descs[1].area_m2 = 0.012;
 
             desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
@@ -385,6 +445,18 @@ static bool TryParseUnsignedValue (const char *text, const char *prefix, u32 *va
     return true;
 }
 
+static u32 RoundUpToMultiple (u32 value, u32 multiple)
+{
+    ASSERT(multiple > 0);
+
+    if ((value % multiple) == 0)
+    {
+        return value;
+    }
+
+    return value + (multiple - (value % multiple));
+}
+
 static void InitializeVerificationSettings (VerificationSettings *settings)
 {
     ASSERT(settings != NULL);
@@ -393,7 +465,15 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->probe_type = FDTD_1D_PROBE_TYPE_PRESSURE;
     settings->excitation_type = VERIFICATION_EXCITATION_TYPE_IMPULSE;
     settings->csv_output_path = NULL;
+    settings->source_index_was_overridden = false;
+    settings->left_probe_index_was_overridden = false;
+    settings->right_probe_index_was_overridden = false;
+    settings->run_length_sweep = false;
     settings->block_count = 256;
+    settings->length_sweep_start_cell_count = 64;
+    settings->length_sweep_end_cell_count = 256;
+    settings->length_sweep_step_cell_count = 32;
+    settings->pressure_cell_count = 128;
     settings->source_cell_index = 16;
     settings->left_probe_index = 96;
     settings->right_probe_index = 112;
@@ -436,26 +516,70 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
             continue;
         }
 
+        if (TryParseUnsignedValue(argument, "cells=", &parsed_value))
+        {
+            if (parsed_value > 7)
+            {
+                settings->pressure_cell_count = parsed_value;
+            }
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "sweep_start=", &parsed_value))
+        {
+            settings->length_sweep_start_cell_count = parsed_value;
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "sweep_end=", &parsed_value))
+        {
+            settings->length_sweep_end_cell_count = parsed_value;
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "sweep_step=", &parsed_value))
+        {
+            if (parsed_value > 0)
+            {
+                settings->length_sweep_step_cell_count = parsed_value;
+            }
+            continue;
+        }
+
         if (TryParseUnsignedValue(argument, "source=", &parsed_value))
         {
             settings->source_cell_index = parsed_value;
+            settings->source_index_was_overridden = true;
             continue;
         }
 
         if (TryParseUnsignedValue(argument, "left_probe=", &parsed_value))
         {
             settings->left_probe_index = parsed_value;
+            settings->left_probe_index_was_overridden = true;
             continue;
         }
 
         if (TryParseUnsignedValue(argument, "right_probe=", &parsed_value))
         {
             settings->right_probe_index = parsed_value;
+            settings->right_probe_index_was_overridden = true;
+            continue;
+        }
+
+        if ((_stricmp(argument, "length-sweep") == 0) || (_stricmp(argument, "sweep-length") == 0))
+        {
+            settings->run_length_sweep = true;
             continue;
         }
 
         settings->csv_output_path = argument;
     }
+
+    settings->pressure_cell_count = RoundUpToMultiple(settings->pressure_cell_count, 8);
+    settings->length_sweep_start_cell_count = RoundUpToMultiple(settings->length_sweep_start_cell_count, 8);
+    settings->length_sweep_end_cell_count = RoundUpToMultiple(settings->length_sweep_end_cell_count, 8);
+    settings->length_sweep_step_cell_count = RoundUpToMultiple(settings->length_sweep_step_cell_count, 8);
 }
 
 static bool WriteCaptureCsv (const char *path, const SimulationOfflineCapture *capture)
@@ -828,92 +952,80 @@ static f64 ComputeStateEnergy (const Fdtd1DState *state)
     return energy;
 }
 
-int main (int argc, char **argv)
+static bool RunVerification (
+    const VerificationSettings *settings,
+    VerificationRunSummary *summary,
+    SimulationOfflineCapture *capture,
+    Fdtd1DDesc *solver_desc,
+    Fdtd1DProbeDesc *probe_descs,
+    Fdtd1DSourceDesc *source_descs
+)
 {
     static const f64 IMPULSE_AMPLITUDE = 0.25;
     static const u32 NOISE_BURST_FRAME_COUNT = 128;
-    static const f32 FIRST_ARRIVAL_THRESHOLD = 0.001f;
-    static const u32 WINDOW_RADIUS = 4;
 
-    VerificationSettings settings;
     MemoryArena arena;
     Fdtd1D solver;
-    Fdtd1DDesc solver_desc;
     Fdtd1DAreaSegmentDesc area_segment_descs[2];
-    Fdtd1DProbeDesc probe_descs[2];
-    Fdtd1DSourceDesc source_descs[1];
     Simulation *simulation;
     SimulationExcitation excitation;
-    SimulationOfflineCapture capture;
-    ArrivalSummary left_arrival;
-    ArrivalSummary right_arrival;
-    WindowPeakResult left_reflection_window;
-    WindowPeakResult right_reflection_window;
-    WindowEnergyResult left_reflection_energy;
-    WindowEnergyResult right_reflection_energy;
-    ModeResult mode_results[MODE_COUNT];
-    const SimulationStats *stats;
     const Fdtd1DState *state;
     usize capture_sample_count;
-    f64 expected_left_arrival_seconds;
-    f64 expected_right_arrival_seconds;
-    f64 expected_left_arrival_frames;
-    f64 expected_right_arrival_frames;
-    f64 expected_left_reflection_frames;
-    f64 expected_right_reflection_frames;
-    EnergyResult energy;
     u32 block_index;
-    int exit_code;
+    bool result;
+    f32 *persistent_capture_samples;
 
-    exit_code = 0;
+    ASSERT(settings != NULL);
+    ASSERT(summary != NULL);
+    ASSERT(capture != NULL);
+    ASSERT(solver_desc != NULL);
+    ASSERT(probe_descs != NULL);
+    ASSERT(source_descs != NULL);
 
-    InitializeVerificationSettings(&settings);
-    ParseArguments(argc, argv, &settings);
+    result = false;
+    persistent_capture_samples = NULL;
 
     memset(&arena, 0, sizeof(arena));
     memset(&solver, 0, sizeof(solver));
-    memset(&solver_desc, 0, sizeof(solver_desc));
-    memset(&capture, 0, sizeof(capture));
+    memset(solver_desc, 0, sizeof(*solver_desc));
+    memset(capture, 0, sizeof(*capture));
     memset(&excitation, 0, sizeof(excitation));
+    memset(summary, 0, sizeof(*summary));
 
     if (MemoryArena_Create(&arena, 16 * 1024 * 1024) == false)
     {
         fprintf(stderr, "Failed to create verification arena.\n");
-        return 1;
+        return false;
     }
 
-    ConfigureSolver(&settings, &solver_desc, area_segment_descs, probe_descs, source_descs);
+    ConfigureSolver(settings, solver_desc, area_segment_descs, probe_descs, source_descs);
 
-    if (Fdtd1D_Initialize(&solver, &arena, &solver_desc) == false)
+    if (Fdtd1D_Initialize(&solver, &arena, solver_desc) == false)
     {
         fprintf(stderr, "Failed to initialize 1D FDTD solver.\n");
-        MemoryArena_Destroy(&arena);
-        return 1;
+        goto cleanup;
     }
 
     simulation = Fdtd1D_GetSimulation(&solver);
 
-    capture.channel_count = solver_desc.output_channel_count;
-    capture.frame_capacity = solver_desc.block_frame_count * settings.block_count;
-    capture.frame_count = 0;
-    capture_sample_count = (usize) capture.frame_capacity * (usize) capture.channel_count;
-    capture.samples = MEMORY_ARENA_PUSH_ARRAY(&arena, capture_sample_count, f32);
-
-    if (capture.samples == NULL)
+    capture->channel_count = solver_desc->output_channel_count;
+    capture->frame_capacity = solver_desc->block_frame_count * settings->block_count;
+    capture->frame_count = 0;
+    capture_sample_count = (usize) capture->frame_capacity * (usize) capture->channel_count;
+    capture->samples = MEMORY_ARENA_PUSH_ARRAY(&arena, capture_sample_count, f32);
+    if (capture->samples == NULL)
     {
         fprintf(stderr, "Failed to allocate capture buffer.\n");
-        Fdtd1D_Shutdown(&solver);
-        MemoryArena_Destroy(&arena);
-        return 1;
+        goto cleanup;
     }
 
     excitation.type =
-        (settings.excitation_type == VERIFICATION_EXCITATION_TYPE_NOISE_BURST) ?
+        (settings->excitation_type == VERIFICATION_EXCITATION_TYPE_NOISE_BURST) ?
         SIMULATION_EXCITATION_TYPE_NOISE :
         SIMULATION_EXCITATION_TYPE_IMPULSE;
     excitation.target_index = 0;
     excitation.remaining_frame_count =
-        (settings.excitation_type == VERIFICATION_EXCITATION_TYPE_NOISE_BURST) ?
+        (settings->excitation_type == VERIFICATION_EXCITATION_TYPE_NOISE_BURST) ?
         NOISE_BURST_FRAME_COUNT :
         1;
     excitation.value = IMPULSE_AMPLITUDE;
@@ -922,29 +1034,20 @@ int main (int argc, char **argv)
     if (Simulation_QueueExcitation(simulation, &excitation) == false)
     {
         fprintf(stderr, "Failed to queue verification impulse.\n");
-        Fdtd1D_Shutdown(&solver);
-        MemoryArena_Destroy(&arena);
-        return 1;
+        goto cleanup;
     }
 
-    energy.initial_energy = 0.0;
-    energy.minimum_energy = 0.0;
-    energy.maximum_energy = 0.0;
-    energy.final_energy = 0.0;
-
-    for (block_index = 0; block_index < settings.block_count; block_index += 1)
+    for (block_index = 0; block_index < settings->block_count; block_index += 1)
     {
         if (Simulation_ProcessBlock(simulation) == false)
         {
             fprintf(stderr, "Offline solver run failed.\n");
-            exit_code = 1;
             goto cleanup;
         }
 
-        if (Simulation_CaptureOutput(simulation, &capture) == false)
+        if (Simulation_CaptureOutput(simulation, capture) == false)
         {
             fprintf(stderr, "Failed to capture offline output block.\n");
-            exit_code = 1;
             goto cleanup;
         }
 
@@ -956,28 +1059,171 @@ int main (int argc, char **argv)
             block_energy = ComputeStateEnergy(state);
             if (block_index == 0)
             {
-                energy.initial_energy = block_energy;
-                energy.minimum_energy = block_energy;
-                energy.maximum_energy = block_energy;
+                summary->energy.initial_energy = block_energy;
+                summary->energy.minimum_energy = block_energy;
+                summary->energy.maximum_energy = block_energy;
             }
             else
             {
-                if (block_energy < energy.minimum_energy)
+                if (block_energy < summary->energy.minimum_energy)
                 {
-                    energy.minimum_energy = block_energy;
+                    summary->energy.minimum_energy = block_energy;
                 }
 
-                if (block_energy > energy.maximum_energy)
+                if (block_energy > summary->energy.maximum_energy)
                 {
-                    energy.maximum_energy = block_energy;
+                    summary->energy.maximum_energy = block_energy;
                 }
             }
 
-            energy.final_energy = block_energy;
+            summary->energy.final_energy = block_energy;
         }
     }
 
-    stats = Simulation_GetStats(simulation);
+    AnalyzeModeSeries(
+        capture,
+        solver_desc,
+        0,
+        solver_desc->block_frame_count,
+        MODE_COUNT,
+        summary->mode_results
+    );
+
+    summary->stats = *Simulation_GetStats(simulation);
+    summary->pressure_cell_count = solver_desc->pressure_cell_count;
+    summary->tube_length_m = solver_desc->tube_length_m;
+    persistent_capture_samples = (f32 *) malloc(sizeof(f32) * capture_sample_count);
+    if (persistent_capture_samples == NULL)
+    {
+        fprintf(stderr, "Failed to allocate persistent capture buffer.\n");
+        goto cleanup;
+    }
+
+    memcpy(persistent_capture_samples, capture->samples, sizeof(f32) * capture_sample_count);
+    capture->samples = persistent_capture_samples;
+    result = true;
+
+cleanup:
+    Fdtd1D_Shutdown(&solver);
+    MemoryArena_Destroy(&arena);
+    if (result == false)
+    {
+        free(persistent_capture_samples);
+    }
+    return result;
+}
+
+int main (int argc, char **argv)
+{
+    static const f32 FIRST_ARRIVAL_THRESHOLD = 0.001f;
+    static const u32 WINDOW_RADIUS = 4;
+
+    VerificationSettings settings;
+    VerificationRunSummary summary;
+    LengthSweepResult sweep_results[32];
+    Fdtd1DDesc solver_desc;
+    Fdtd1DProbeDesc probe_descs[2];
+    Fdtd1DSourceDesc source_descs[1];
+    SimulationOfflineCapture capture;
+    ArrivalSummary left_arrival;
+    ArrivalSummary right_arrival;
+    WindowPeakResult left_reflection_window;
+    WindowPeakResult right_reflection_window;
+    WindowEnergyResult left_reflection_energy;
+    WindowEnergyResult right_reflection_energy;
+    ModeResult mode_results[MODE_COUNT];
+    f64 expected_left_arrival_seconds;
+    f64 expected_right_arrival_seconds;
+    f64 expected_left_arrival_frames;
+    f64 expected_right_arrival_frames;
+    f64 expected_left_reflection_frames;
+    f64 expected_right_reflection_frames;
+    u32 length_cell_count;
+    u32 sweep_result_count;
+    u32 block_index;
+
+    InitializeVerificationSettings(&settings);
+    ParseArguments(argc, argv, &settings);
+
+    if (settings.run_length_sweep)
+    {
+        sweep_result_count = 0;
+        for (length_cell_count = settings.length_sweep_start_cell_count;
+             length_cell_count <= settings.length_sweep_end_cell_count;
+             length_cell_count += settings.length_sweep_step_cell_count)
+        {
+            VerificationSettings sweep_settings;
+
+            if (sweep_result_count >= ARRAY_COUNT(sweep_results))
+            {
+                break;
+            }
+
+            sweep_settings = settings;
+            sweep_settings.run_length_sweep = false;
+            sweep_settings.pressure_cell_count = length_cell_count;
+
+            if (RunVerification(&sweep_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
+            {
+                return 1;
+            }
+
+            sweep_results[sweep_result_count].pressure_cell_count = summary.pressure_cell_count;
+            sweep_results[sweep_result_count].tube_length_m = summary.tube_length_m;
+            sweep_results[sweep_result_count].expected_fundamental_hz =
+                summary.mode_results[0].expected_frequency_hz;
+            sweep_results[sweep_result_count].measured_fundamental_hz =
+                summary.mode_results[0].measured_peak_frequency_hz;
+            sweep_results[sweep_result_count].measured_fundamental_magnitude =
+                summary.mode_results[0].measured_peak_magnitude;
+            sweep_results[sweep_result_count].final_energy_drift =
+                summary.energy.final_energy - summary.energy.initial_energy;
+            sweep_result_count += 1;
+            free(capture.samples);
+            capture.samples = NULL;
+        }
+
+        printf("FDTD 1D Length Sweep\n\n");
+        printf("Setup\n");
+        printf("  preset:                 %s\n", GetPresetName(settings.preset));
+        printf("  excitation:             %s\n", GetExcitationTypeName(settings.excitation_type));
+        printf("  probe_type:             %s\n", GetProbeTypeName(settings.probe_type));
+        printf("  blocks:                 %u\n", settings.block_count);
+        printf("  sweep_start_cells:      %u\n", settings.length_sweep_start_cell_count);
+        printf("  sweep_end_cells:        %u\n", settings.length_sweep_end_cell_count);
+        printf("  sweep_step_cells:       %u\n", settings.length_sweep_step_cell_count);
+        printf("\n");
+        printf("Length Sweep Results\n");
+        printf("  cells    length_m   expected_f0   measured_f0   delta_hz   delta_pct   magnitude    energy_drift\n");
+        for (block_index = 0; block_index < sweep_result_count; block_index += 1)
+        {
+            f64 delta_hz;
+            f64 delta_percent;
+
+            delta_hz = sweep_results[block_index].measured_fundamental_hz -
+                sweep_results[block_index].expected_fundamental_hz;
+            delta_percent = 100.0 * (delta_hz / sweep_results[block_index].expected_fundamental_hz);
+
+            printf(
+                "  %-8u %-10.6f %-13.2f %-13.2f %-10.2f %-10.2f %-12.6f %.9f\n",
+                sweep_results[block_index].pressure_cell_count,
+                sweep_results[block_index].tube_length_m,
+                sweep_results[block_index].expected_fundamental_hz,
+                sweep_results[block_index].measured_fundamental_hz,
+                delta_hz,
+                delta_percent,
+                sweep_results[block_index].measured_fundamental_magnitude,
+                sweep_results[block_index].final_energy_drift
+            );
+        }
+
+        return 0;
+    }
+
+    if (RunVerification(&settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
+    {
+        return 1;
+    }
 
     expected_left_arrival_seconds =
         ((f64) (probe_descs[0].cell_index - source_descs[0].cell_index) * solver_desc.dx) /
@@ -1033,14 +1279,7 @@ int main (int argc, char **argv)
         (u32) expected_right_reflection_frames - WINDOW_RADIUS,
         (u32) expected_right_reflection_frames + WINDOW_RADIUS
     );
-    AnalyzeModeSeries(
-        &capture,
-        &solver_desc,
-        0,
-        solver_desc.block_frame_count,
-        MODE_COUNT,
-        mode_results
-    );
+    memcpy(mode_results, summary.mode_results, sizeof(mode_results));
 
     printf("FDTD 1D Verification\n");
     printf("\n");
@@ -1059,7 +1298,7 @@ int main (int argc, char **argv)
         capture.frame_count
     );
     printf("  courant:                %.6f\n",
-        solver.desc.courant_number
+        solver_desc.courant_number
     );
     printf("  left_boundary:          %s\n",
         GetBoundaryTypeName(solver_desc.left_boundary.type)
@@ -1074,13 +1313,13 @@ int main (int argc, char **argv)
         GetExcitationTypeName(settings.excitation_type)
     );
     printf("  source_index:          %u\n",
-        settings.source_cell_index
+        source_descs[0].cell_index
     );
     printf("  left_probe_index:      %u\n",
-        settings.left_probe_index
+        probe_descs[0].cell_index
     );
     printf("  right_probe_index:     %u\n",
-        settings.right_probe_index
+        probe_descs[1].cell_index
     );
     printf("\n");
 
@@ -1170,43 +1409,43 @@ int main (int argc, char **argv)
 
     printf("Runtime Stats\n");
     printf("  processed blocks:       %llu\n",
-        (unsigned long long) stats->processed_block_count
+        (unsigned long long) summary.stats.processed_block_count
     );
     printf("  processed frames:       %llu\n",
-        (unsigned long long) stats->processed_frame_count
+        (unsigned long long) summary.stats.processed_frame_count
     );
     printf("  processed seconds:      %.6f\n",
-        stats->processed_seconds
+        summary.stats.processed_seconds
     );
     printf("  max output abs:         %.6f\n",
-        stats->max_abs_output
+        summary.stats.max_abs_output
     );
     printf("  max probe abs:          %.6f\n",
-        stats->max_abs_probe
+        summary.stats.max_abs_probe
     );
     printf("  saw NaN:                %s\n",
-        stats->saw_nan ? "yes" : "no"
+        summary.stats.saw_nan ? "yes" : "no"
     );
     printf("  saw Inf:                %s\n",
-        stats->saw_inf ? "yes" : "no"
+        summary.stats.saw_inf ? "yes" : "no"
     );
     printf("\n");
 
     printf("Energy\n");
     printf("  initial:                %.9f\n",
-        energy.initial_energy
+        summary.energy.initial_energy
     );
     printf("  minimum:                %.9f\n",
-        energy.minimum_energy
+        summary.energy.minimum_energy
     );
     printf("  maximum:                %.9f\n",
-        energy.maximum_energy
+        summary.energy.maximum_energy
     );
     printf("  final:                  %.9f\n",
-        energy.final_energy
+        summary.energy.final_energy
     );
     printf("  drift:                  %.9f\n",
-        energy.final_energy - energy.initial_energy
+        summary.energy.final_energy - summary.energy.initial_energy
     );
     printf("\n");
 
@@ -1235,13 +1474,11 @@ int main (int argc, char **argv)
         else
         {
             fprintf(stderr, "Failed to write CSV output: %s\n", settings.csv_output_path);
-            exit_code = 1;
+            return 1;
         }
     }
 
-cleanup:
-    Fdtd1D_Shutdown(&solver);
-    MemoryArena_Destroy(&arena);
+    free(capture.samples);
 
-    return exit_code;
+    return 0;
 }
