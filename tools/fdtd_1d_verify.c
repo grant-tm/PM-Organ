@@ -57,10 +57,30 @@ typedef struct ModeResult
     f64 measured_peak_magnitude;
 } ModeResult;
 
+typedef struct SustainedAnalysisResult
+{
+    u32 early_start_frame;
+    u32 early_end_frame;
+    u32 late_start_frame;
+    u32 late_end_frame;
+    u32 late_window_a_start_frame;
+    u32 late_window_a_end_frame;
+    u32 late_window_b_start_frame;
+    u32 late_window_b_end_frame;
+    f64 early_rms;
+    f64 late_rms;
+    f64 late_dominant_frequency_a_hz;
+    f64 late_dominant_frequency_b_hz;
+    f64 dominant_frequency_drift_hz;
+    f64 late_to_early_rms_ratio;
+} SustainedAnalysisResult;
+
 typedef enum VerificationExcitationType
 {
     VERIFICATION_EXCITATION_TYPE_IMPULSE = 0,
     VERIFICATION_EXCITATION_TYPE_NOISE_BURST,
+    VERIFICATION_EXCITATION_TYPE_CONSTANT,
+    VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH,
 } VerificationExcitationType;
 
 typedef enum VerificationPreset
@@ -97,6 +117,7 @@ typedef struct VerificationSettings
 typedef struct VerificationRunSummary
 {
     ModeResult mode_results[MODE_COUNT];
+    SustainedAnalysisResult sustained;
     EnergyResult energy;
     SimulationStats stats;
     u32 pressure_cell_count;
@@ -211,6 +232,8 @@ static const char *GetExcitationTypeName (VerificationExcitationType excitation_
     {
         case VERIFICATION_EXCITATION_TYPE_IMPULSE: return "impulse";
         case VERIFICATION_EXCITATION_TYPE_NOISE_BURST: return "noise-burst";
+        case VERIFICATION_EXCITATION_TYPE_CONSTANT: return "constant";
+        case VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH: return "nonlinear-mouth";
     }
 
     ASSERT(false);
@@ -413,6 +436,18 @@ static bool TryParseExcitationTypeName (const char *text, VerificationExcitation
     if ((_stricmp(text, "noise-burst") == 0) || (_stricmp(text, "noise") == 0))
     {
         *excitation_type = VERIFICATION_EXCITATION_TYPE_NOISE_BURST;
+        return true;
+    }
+
+    if ((_stricmp(text, "constant") == 0) || (_stricmp(text, "dc") == 0))
+    {
+        *excitation_type = VERIFICATION_EXCITATION_TYPE_CONSTANT;
+        return true;
+    }
+
+    if ((_stricmp(text, "nonlinear-mouth") == 0) || (_stricmp(text, "mouth") == 0))
+    {
+        *excitation_type = VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
         return true;
     }
 
@@ -831,6 +866,99 @@ static f64 ComputeSpectrumMagnitude (
     return sqrt(real_sum * real_sum + imaginary_sum * imaginary_sum);
 }
 
+static f64 ComputeWindowRms (
+    const SimulationOfflineCapture *capture,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame
+)
+{
+    f64 sum_squares;
+    u32 frame_count;
+    u32 frame_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(capture->samples != NULL);
+    ASSERT(analysis_channel_index < capture->channel_count);
+    ASSERT(start_frame <= end_frame);
+
+    if (capture->frame_count == 0)
+    {
+        return 0.0;
+    }
+
+    if (end_frame >= capture->frame_count)
+    {
+        end_frame = capture->frame_count - 1;
+    }
+
+    if (start_frame > end_frame)
+    {
+        return 0.0;
+    }
+
+    sum_squares = 0.0;
+    frame_count = end_frame - start_frame + 1;
+    for (frame_index = start_frame; frame_index <= end_frame; frame_index += 1)
+    {
+        f64 sample;
+
+        sample = (f64) capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        sum_squares += sample * sample;
+    }
+
+    return sqrt(sum_squares / (f64) frame_count);
+}
+
+static f64 FindDominantFrequencyInRange (
+    const SimulationOfflineCapture *capture,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 sample_rate,
+    f64 frequency_start_hz,
+    f64 frequency_end_hz,
+    f64 frequency_step_hz
+)
+{
+    f64 best_frequency_hz;
+    f64 best_magnitude;
+    f64 search_frequency_hz;
+
+    ASSERT(capture != NULL);
+    ASSERT(capture->samples != NULL);
+    ASSERT(analysis_channel_index < capture->channel_count);
+    ASSERT(sample_rate > 0.0);
+    ASSERT(frequency_step_hz > 0.0);
+    ASSERT(frequency_start_hz <= frequency_end_hz);
+
+    best_frequency_hz = frequency_start_hz;
+    best_magnitude = 0.0;
+
+    for (search_frequency_hz = frequency_start_hz;
+         search_frequency_hz <= frequency_end_hz;
+         search_frequency_hz += frequency_step_hz)
+    {
+        f64 magnitude;
+
+        magnitude = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            start_frame,
+            end_frame,
+            sample_rate,
+            search_frequency_hz
+        );
+        if (magnitude > best_magnitude)
+        {
+            best_magnitude = magnitude;
+            best_frequency_hz = search_frequency_hz;
+        }
+    }
+
+    return best_frequency_hz;
+}
+
 static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc)
 {
     ASSERT(desc != NULL);
@@ -849,6 +977,102 @@ static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc)
     }
 
     return desc->wave_speed_m_per_s / (2.0 * desc->tube_length_m);
+}
+
+static void AnalyzeSustainedBehavior (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    u32 analysis_channel_index,
+    SustainedAnalysisResult *result
+)
+{
+    static const f64 RMS_EPSILON = 1e-9;
+
+    f64 frequency_end_hz;
+    f64 frequency_start_hz;
+    f64 fundamental_frequency_hz;
+    f64 nyquist_hz;
+    u32 mid_frame;
+
+    ASSERT(capture != NULL);
+    ASSERT(capture->samples != NULL);
+    ASSERT(desc != NULL);
+    ASSERT(result != NULL);
+
+    memset(result, 0, sizeof(*result));
+    if (capture->frame_count < 16)
+    {
+        return;
+    }
+
+    result->early_start_frame = 0;
+    result->early_end_frame = (capture->frame_count / 4) - 1;
+    result->late_start_frame = (capture->frame_count * 3) / 4;
+    result->late_end_frame = capture->frame_count - 1;
+    if (result->late_start_frame >= result->late_end_frame)
+    {
+        result->late_start_frame = capture->frame_count / 2;
+    }
+
+    mid_frame = result->late_start_frame + ((result->late_end_frame - result->late_start_frame) / 2);
+    result->late_window_a_start_frame = result->late_start_frame;
+    result->late_window_a_end_frame = mid_frame;
+    result->late_window_b_start_frame = (mid_frame < result->late_end_frame) ? (mid_frame + 1) : mid_frame;
+    result->late_window_b_end_frame = result->late_end_frame;
+
+    result->early_rms = ComputeWindowRms(
+        capture,
+        analysis_channel_index,
+        result->early_start_frame,
+        result->early_end_frame
+    );
+    result->late_rms = ComputeWindowRms(
+        capture,
+        analysis_channel_index,
+        result->late_start_frame,
+        result->late_end_frame
+    );
+    result->late_to_early_rms_ratio = result->late_rms / (result->early_rms + RMS_EPSILON);
+
+    fundamental_frequency_hz = GetFundamentalFrequencyHz(desc);
+    nyquist_hz = 0.5 * (f64) desc->sample_rate;
+    frequency_start_hz = fundamental_frequency_hz * 0.5;
+    frequency_end_hz = fundamental_frequency_hz * 8.0;
+    if (frequency_end_hz > (nyquist_hz - 10.0))
+    {
+        frequency_end_hz = nyquist_hz - 10.0;
+    }
+    if (frequency_start_hz < 20.0)
+    {
+        frequency_start_hz = 20.0;
+    }
+    if (frequency_end_hz <= frequency_start_hz)
+    {
+        frequency_end_hz = frequency_start_hz + 10.0;
+    }
+
+    result->late_dominant_frequency_a_hz = FindDominantFrequencyInRange(
+        capture,
+        analysis_channel_index,
+        result->late_window_a_start_frame,
+        result->late_window_a_end_frame,
+        (f64) desc->sample_rate,
+        frequency_start_hz,
+        frequency_end_hz,
+        1.0
+    );
+    result->late_dominant_frequency_b_hz = FindDominantFrequencyInRange(
+        capture,
+        analysis_channel_index,
+        result->late_window_b_start_frame,
+        result->late_window_b_end_frame,
+        (f64) desc->sample_rate,
+        frequency_start_hz,
+        frequency_end_hz,
+        1.0
+    );
+    result->dominant_frequency_drift_hz =
+        fabs(result->late_dominant_frequency_b_hz - result->late_dominant_frequency_a_hz);
 }
 
 static void AnalyzeModeSeries (
@@ -962,6 +1186,7 @@ static bool RunVerification (
 )
 {
     static const f64 IMPULSE_AMPLITUDE = 0.25;
+    static const f64 SUSTAINED_DRIVE_AMPLITUDE = 0.001;
     static const u32 NOISE_BURST_FRAME_COUNT = 128;
 
     MemoryArena arena;
@@ -1019,16 +1244,37 @@ static bool RunVerification (
         goto cleanup;
     }
 
-    excitation.type =
-        (settings->excitation_type == VERIFICATION_EXCITATION_TYPE_NOISE_BURST) ?
-        SIMULATION_EXCITATION_TYPE_NOISE :
-        SIMULATION_EXCITATION_TYPE_IMPULSE;
     excitation.target_index = 0;
-    excitation.remaining_frame_count =
-        (settings->excitation_type == VERIFICATION_EXCITATION_TYPE_NOISE_BURST) ?
-        NOISE_BURST_FRAME_COUNT :
-        1;
-    excitation.value = IMPULSE_AMPLITUDE;
+    switch (settings->excitation_type)
+    {
+        case VERIFICATION_EXCITATION_TYPE_IMPULSE:
+        {
+            excitation.type = SIMULATION_EXCITATION_TYPE_IMPULSE;
+            excitation.remaining_frame_count = 1;
+            excitation.value = IMPULSE_AMPLITUDE;
+        } break;
+
+        case VERIFICATION_EXCITATION_TYPE_NOISE_BURST:
+        {
+            excitation.type = SIMULATION_EXCITATION_TYPE_NOISE;
+            excitation.remaining_frame_count = NOISE_BURST_FRAME_COUNT;
+            excitation.value = IMPULSE_AMPLITUDE;
+        } break;
+
+        case VERIFICATION_EXCITATION_TYPE_CONSTANT:
+        {
+            excitation.type = SIMULATION_EXCITATION_TYPE_VELOCITY_CONSTANT;
+            excitation.remaining_frame_count = settings->block_count * solver_desc->block_frame_count;
+            excitation.value = SUSTAINED_DRIVE_AMPLITUDE;
+        } break;
+
+        case VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH:
+        {
+            excitation.type = SIMULATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+            excitation.remaining_frame_count = settings->block_count * solver_desc->block_frame_count;
+            excitation.value = SUSTAINED_DRIVE_AMPLITUDE;
+        } break;
+    }
     excitation.is_active = true;
 
     if (Simulation_QueueExcitation(simulation, &excitation) == false)
@@ -1088,6 +1334,7 @@ static bool RunVerification (
         MODE_COUNT,
         summary->mode_results
     );
+    AnalyzeSustainedBehavior(capture, solver_desc, 0, &summary->sustained);
 
     summary->stats = *Simulation_GetStats(simulation);
     summary->pressure_cell_count = solver_desc->pressure_cell_count;
@@ -1463,6 +1710,43 @@ int main (int argc, char **argv)
             mode_results[block_index].measured_peak_magnitude
         );
     }
+    printf("\n");
+
+    printf("Sustained Analysis\n");
+    printf("  early_rms_window:       [%u, %u]\n",
+        summary.sustained.early_start_frame,
+        summary.sustained.early_end_frame
+    );
+    printf("  late_rms_window:        [%u, %u]\n",
+        summary.sustained.late_start_frame,
+        summary.sustained.late_end_frame
+    );
+    printf("  early_rms:              %.9f\n",
+        summary.sustained.early_rms
+    );
+    printf("  late_rms:               %.9f\n",
+        summary.sustained.late_rms
+    );
+    printf("  late/early_rms_ratio:   %.6f\n",
+        summary.sustained.late_to_early_rms_ratio
+    );
+    printf("  late_freq_window_a:     [%u, %u]\n",
+        summary.sustained.late_window_a_start_frame,
+        summary.sustained.late_window_a_end_frame
+    );
+    printf("  late_freq_window_b:     [%u, %u]\n",
+        summary.sustained.late_window_b_start_frame,
+        summary.sustained.late_window_b_end_frame
+    );
+    printf("  dominant_freq_a_hz:     %.2f\n",
+        summary.sustained.late_dominant_frequency_a_hz
+    );
+    printf("  dominant_freq_b_hz:     %.2f\n",
+        summary.sustained.late_dominant_frequency_b_hz
+    );
+    printf("  dominant_freq_drift_hz: %.2f\n",
+        summary.sustained.dominant_frequency_drift_hz
+    );
     printf("\n");
 
     if (settings.csv_output_path != NULL)
