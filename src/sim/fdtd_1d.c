@@ -5,8 +5,8 @@
 #include "pm_organ/sim/fdtd_1d.h"
 
 static const f64 FDTD_1D_PI = 3.14159265358979323846;
-static const f64 OPEN_END_CORRECTION_COEFFICIENT = 0.61;
-static const f64 OPEN_END_RADIATION_RESISTANCE_SCALE = 1.0;
+static const f64 OPEN_END_CORRECTION_COEFFICIENT = 0.45;
+static const f64 OPEN_END_RADIATION_RESISTANCE_SCALE = 1.5;
 
 static f64 AbsF64 (f64 value)
 {
@@ -841,3 +841,5 @@ const Fdtd1DState *Fdtd1D_GetState (const Fdtd1D *solver)
 
     return solver->state;
 }
+
+
