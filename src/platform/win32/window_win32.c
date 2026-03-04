@@ -184,3 +184,17 @@ void PlatformWindow_PumpMessages (Window *window)
         DispatchMessageA(&message);
     }
 }
+
+void PlatformWindow_SetTitle (Window *window, const char *title)
+{
+    HWND hwnd;
+
+    ASSERT(window != NULL);
+    ASSERT(title != NULL);
+
+    hwnd = (HWND) window->native_handle;
+    if (hwnd != NULL)
+    {
+        SetWindowTextA(hwnd, title);
+    }
+}

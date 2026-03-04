@@ -68,7 +68,10 @@ typedef enum VerificationPreset
     VERIFICATION_PRESET_RIGID_RIGID = 0,
     VERIFICATION_PRESET_OPEN_OPEN,
     VERIFICATION_PRESET_OPEN_RIGID,
-    VERIFICATION_PRESET_STAGE2_STOPPED,
+    VERIFICATION_PRESET_STAGE2_UNIFORM_STOPPED,
+    VERIFICATION_PRESET_STAGE2_NARROW_MOUTH_STOPPED,
+    VERIFICATION_PRESET_STAGE2_WIDE_MOUTH_STOPPED,
+    VERIFICATION_PRESET_STAGE2_OPEN_PIPE,
 } VerificationPreset;
 
 typedef struct VerificationSettings
@@ -115,7 +118,10 @@ static const char *GetPresetName (VerificationPreset preset)
         case VERIFICATION_PRESET_RIGID_RIGID: return "rigid-rigid";
         case VERIFICATION_PRESET_OPEN_OPEN: return "open-open";
         case VERIFICATION_PRESET_OPEN_RIGID: return "open-rigid";
-        case VERIFICATION_PRESET_STAGE2_STOPPED: return "stage2-stopped";
+        case VERIFICATION_PRESET_STAGE2_UNIFORM_STOPPED: return "stage2-uniform-stopped";
+        case VERIFICATION_PRESET_STAGE2_NARROW_MOUTH_STOPPED: return "stage2-narrow-mouth";
+        case VERIFICATION_PRESET_STAGE2_WIDE_MOUTH_STOPPED: return "stage2-wide-mouth";
+        case VERIFICATION_PRESET_STAGE2_OPEN_PIPE: return "stage2-open-pipe";
     }
 
     ASSERT(false);
@@ -145,9 +151,27 @@ static bool TryParsePresetName (const char *text, VerificationPreset *preset)
         return true;
     }
 
-    if ((_stricmp(text, "stage2-stopped") == 0) || (_stricmp(text, "stepped-stopped") == 0))
+    if ((_stricmp(text, "stage2-uniform-stopped") == 0) || (_stricmp(text, "uniform-stopped") == 0))
     {
-        *preset = VERIFICATION_PRESET_STAGE2_STOPPED;
+        *preset = VERIFICATION_PRESET_STAGE2_UNIFORM_STOPPED;
+        return true;
+    }
+
+    if ((_stricmp(text, "stage2-narrow-mouth") == 0) || (_stricmp(text, "narrow-mouth") == 0))
+    {
+        *preset = VERIFICATION_PRESET_STAGE2_NARROW_MOUTH_STOPPED;
+        return true;
+    }
+
+    if ((_stricmp(text, "stage2-wide-mouth") == 0) || (_stricmp(text, "wide-mouth") == 0))
+    {
+        *preset = VERIFICATION_PRESET_STAGE2_WIDE_MOUTH_STOPPED;
+        return true;
+    }
+
+    if ((_stricmp(text, "stage2-open-pipe") == 0) || (_stricmp(text, "open-pipe") == 0))
+    {
+        *preset = VERIFICATION_PRESET_STAGE2_OPEN_PIPE;
         return true;
     }
 
@@ -235,7 +259,15 @@ static void ConfigureSolver (
             desc->right_boundary.reflection_coefficient = 1.0;
         } break;
 
-        case VERIFICATION_PRESET_STAGE2_STOPPED:
+        case VERIFICATION_PRESET_STAGE2_UNIFORM_STOPPED:
+        {
+            desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            desc->left_boundary.reflection_coefficient = -1.0;
+            desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
+            desc->right_boundary.reflection_coefficient = 1.0;
+        } break;
+
+        case VERIFICATION_PRESET_STAGE2_NARROW_MOUTH_STOPPED:
         {
             area_segment_descs[0].start_cell_index = 0;
             area_segment_descs[0].end_cell_index = 20;
@@ -246,6 +278,37 @@ static void ConfigureSolver (
             desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
             desc->right_boundary.reflection_coefficient = 1.0;
             desc->area_segment_count = 1;
+            desc->area_segment_descs = area_segment_descs;
+        } break;
+
+        case VERIFICATION_PRESET_STAGE2_WIDE_MOUTH_STOPPED:
+        {
+            area_segment_descs[0].start_cell_index = 0;
+            area_segment_descs[0].end_cell_index = 20;
+            area_segment_descs[0].area_m2 = 0.014;
+
+            desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            desc->left_boundary.reflection_coefficient = -1.0;
+            desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
+            desc->right_boundary.reflection_coefficient = 1.0;
+            desc->area_segment_count = 1;
+            desc->area_segment_descs = area_segment_descs;
+        } break;
+
+        case VERIFICATION_PRESET_STAGE2_OPEN_PIPE:
+        {
+            area_segment_descs[0].start_cell_index = 0;
+            area_segment_descs[0].end_cell_index = 16;
+            area_segment_descs[0].area_m2 = 0.012;
+            area_segment_descs[1].start_cell_index = 112;
+            area_segment_descs[1].end_cell_index = 128;
+            area_segment_descs[1].area_m2 = 0.012;
+
+            desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            desc->left_boundary.reflection_coefficient = -1.0;
+            desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            desc->right_boundary.reflection_coefficient = -1.0;
+            desc->area_segment_count = 2;
             desc->area_segment_descs = area_segment_descs;
         } break;
     }
@@ -776,7 +839,7 @@ int main (int argc, char **argv)
     MemoryArena arena;
     Fdtd1D solver;
     Fdtd1DDesc solver_desc;
-    Fdtd1DAreaSegmentDesc area_segment_descs[1];
+    Fdtd1DAreaSegmentDesc area_segment_descs[2];
     Fdtd1DProbeDesc probe_descs[2];
     Fdtd1DSourceDesc source_descs[1];
     Simulation *simulation;

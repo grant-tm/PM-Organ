@@ -1,3 +1,6 @@
+#include <stdio.h>
+#include <string.h>
+
 #include <windows.h>
 
 #include "pm_organ/app/app.h"
@@ -11,18 +14,165 @@
 #include "pm_organ/sim/fdtd_1d_render_source.h"
 #include "pm_organ/platform/window.h"
 
+typedef enum FdtdPresetType
+{
+    FDTD_PRESET_TYPE_UNIFORM_STOPPED = 0,
+    FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED,
+    FDTD_PRESET_TYPE_WIDE_MOUTH_STOPPED,
+    FDTD_PRESET_TYPE_OPEN_PIPE,
+    FDTD_PRESET_TYPE_COUNT,
+} FdtdPresetType;
+
 typedef struct AppState
 {
     AudioDevice audio_device;
     AudioEngine audio_engine;
-    Fdtd1DRenderSource fdtd_1d_render_source;
+    Fdtd1DRenderSource fdtd_render_sources[FDTD_PRESET_TYPE_COUNT];
     FrameTimer frame_timer;
     Window main_window;
     TestToneSource test_tone_source;
+    FdtdPresetType active_fdtd_preset;
     bool fdtd_source_is_active;
     bool previous_space_is_down;
     bool previous_toggle_is_down;
+    bool previous_cycle_is_down;
 } AppState;
+
+static const char *GetFdtdPresetName (FdtdPresetType preset_type)
+{
+    switch (preset_type)
+    {
+        case FDTD_PRESET_TYPE_UNIFORM_STOPPED: return "Uniform Stopped";
+        case FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED: return "Narrow Mouth";
+        case FDTD_PRESET_TYPE_WIDE_MOUTH_STOPPED: return "Wide Mouth";
+        case FDTD_PRESET_TYPE_OPEN_PIPE: return "Open Pipe";
+        case FDTD_PRESET_TYPE_COUNT: break;
+    }
+
+    ASSERT(false);
+    return "Unknown";
+}
+
+static void UpdateWindowTitle (AppState *app)
+{
+    char title[128];
+    const char *source_name;
+    const char *preset_name;
+
+    ASSERT(app != NULL);
+
+    source_name = app->fdtd_source_is_active ? "FDTD" : "Test Tone";
+    preset_name = GetFdtdPresetName(app->active_fdtd_preset);
+    _snprintf_s(title, ARRAY_COUNT(title), _TRUNCATE, "PM-Organ | %s | %s", source_name, preset_name);
+    PlatformWindow_SetTitle(&app->main_window, title);
+}
+
+static void BuildFdtdPresetDesc (
+    FdtdPresetType preset_type,
+    const AudioEngineDesc *engine_desc,
+    Fdtd1DRenderSourceDesc *render_source_desc,
+    Fdtd1DProbeDesc *probe_descs,
+    Fdtd1DSourceDesc *source_descs,
+    Fdtd1DAreaSegmentDesc *area_segment_descs,
+    u32 *area_segment_count
+)
+{
+    static const f64 TEST_COURANT_NUMBER = 0.9;
+    f64 dx;
+
+    ASSERT(engine_desc != NULL);
+    ASSERT(render_source_desc != NULL);
+    ASSERT(probe_descs != NULL);
+    ASSERT(source_descs != NULL);
+    ASSERT(area_segment_descs != NULL);
+    ASSERT(area_segment_count != NULL);
+
+    dx = 343.0 / (TEST_COURANT_NUMBER * 48000.0);
+
+    probe_descs[0].type = FDTD_1D_PROBE_TYPE_PRESSURE;
+    probe_descs[0].cell_index = 72;
+    probe_descs[0].output_channel_index = 0;
+    probe_descs[0].is_enabled = true;
+
+    probe_descs[1].type = FDTD_1D_PROBE_TYPE_PRESSURE;
+    probe_descs[1].cell_index = 104;
+    probe_descs[1].output_channel_index = 1;
+    probe_descs[1].is_enabled = true;
+
+    source_descs[0].cell_index = 24;
+    source_descs[0].is_enabled = true;
+
+    memset(render_source_desc, 0, sizeof(*render_source_desc));
+    render_source_desc->solver_desc.sample_rate = engine_desc->sample_rate;
+    render_source_desc->solver_desc.block_frame_count = engine_desc->block_frame_count;
+    render_source_desc->solver_desc.output_channel_count = engine_desc->channel_count;
+    render_source_desc->solver_desc.tube_length_m = 128.0 * dx;
+    render_source_desc->solver_desc.wave_speed_m_per_s = 343.0;
+    render_source_desc->solver_desc.density_kg_per_m3 = 1.225;
+    render_source_desc->solver_desc.dx = dx;
+    render_source_desc->solver_desc.pressure_cell_count = 128;
+    render_source_desc->solver_desc.velocity_cell_count = 129;
+    render_source_desc->solver_desc.courant_number = TEST_COURANT_NUMBER;
+    render_source_desc->solver_desc.uniform_area_m2 = 0.01;
+    render_source_desc->solver_desc.uniform_loss = 0.00005;
+    render_source_desc->solver_desc.left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+    render_source_desc->solver_desc.left_boundary.reflection_coefficient = -1.0;
+    render_source_desc->solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
+    render_source_desc->solver_desc.right_boundary.reflection_coefficient = 1.0;
+    render_source_desc->solver_desc.probe_count = 2;
+    render_source_desc->solver_desc.probe_descs = probe_descs;
+    render_source_desc->solver_desc.source_count = 1;
+    render_source_desc->solver_desc.source_descs = source_descs;
+    render_source_desc->startup_impulse_is_enabled = true;
+    render_source_desc->startup_impulse_target_index = 0;
+    render_source_desc->startup_impulse_amplitude = 0.25;
+
+    *area_segment_count = 0;
+    switch (preset_type)
+    {
+        case FDTD_PRESET_TYPE_UNIFORM_STOPPED:
+        {
+        } break;
+
+        case FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED:
+        {
+            area_segment_descs[0].start_cell_index = 0;
+            area_segment_descs[0].end_cell_index = 20;
+            area_segment_descs[0].area_m2 = 0.006;
+            *area_segment_count = 1;
+        } break;
+
+        case FDTD_PRESET_TYPE_WIDE_MOUTH_STOPPED:
+        {
+            area_segment_descs[0].start_cell_index = 0;
+            area_segment_descs[0].end_cell_index = 20;
+            area_segment_descs[0].area_m2 = 0.014;
+            *area_segment_count = 1;
+        } break;
+
+        case FDTD_PRESET_TYPE_OPEN_PIPE:
+        {
+            area_segment_descs[0].start_cell_index = 0;
+            area_segment_descs[0].end_cell_index = 16;
+            area_segment_descs[0].area_m2 = 0.012;
+            area_segment_descs[1].start_cell_index = 112;
+            area_segment_descs[1].end_cell_index = 128;
+            area_segment_descs[1].area_m2 = 0.012;
+            *area_segment_count = 2;
+            render_source_desc->solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            render_source_desc->solver_desc.right_boundary.reflection_coefficient = -1.0;
+        } break;
+
+        case FDTD_PRESET_TYPE_COUNT:
+        {
+            ASSERT(false);
+        } break;
+    }
+
+    render_source_desc->solver_desc.area_segment_count = *area_segment_count;
+    render_source_desc->solver_desc.area_segment_descs =
+        (*area_segment_count > 0) ? area_segment_descs : NULL;
+}
 
 static void SetActiveRenderSource (AppState *app, bool use_fdtd_source)
 {
@@ -33,7 +183,7 @@ static void SetActiveRenderSource (AppState *app, bool use_fdtd_source)
         AudioEngine_SetRenderSource(
             &app->audio_engine,
             Fdtd1DRenderSource_Render,
-            &app->fdtd_1d_render_source
+            &app->fdtd_render_sources[app->active_fdtd_preset]
         );
     }
     else
@@ -42,10 +192,30 @@ static void SetActiveRenderSource (AppState *app, bool use_fdtd_source)
     }
 
     app->fdtd_source_is_active = use_fdtd_source;
+    UpdateWindowTitle(app);
+}
+
+static void CycleFdtdPreset (AppState *app)
+{
+    ASSERT(app != NULL);
+
+    app->active_fdtd_preset = (FdtdPresetType) ((app->active_fdtd_preset + 1) % FDTD_PRESET_TYPE_COUNT);
+    if (app->fdtd_source_is_active)
+    {
+        AudioEngine_SetRenderSource(
+            &app->audio_engine,
+            Fdtd1DRenderSource_Render,
+            &app->fdtd_render_sources[app->active_fdtd_preset]
+        );
+    }
+
+    Fdtd1DRenderSource_TriggerStartupImpulse(&app->fdtd_render_sources[app->active_fdtd_preset]);
+    UpdateWindowTitle(app);
 }
 
 static void UpdateDebugInput (AppState *app)
 {
+    bool cycle_is_down;
     bool space_is_down;
     bool toggle_is_down;
 
@@ -53,10 +223,11 @@ static void UpdateDebugInput (AppState *app)
 
     space_is_down = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
     toggle_is_down = (GetAsyncKeyState('T') & 0x8000) != 0;
+    cycle_is_down = (GetAsyncKeyState('G') & 0x8000) != 0;
 
     if (space_is_down && (app->previous_space_is_down == false))
     {
-        Fdtd1DRenderSource_TriggerStartupImpulse(&app->fdtd_1d_render_source);
+        Fdtd1DRenderSource_TriggerStartupImpulse(&app->fdtd_render_sources[app->active_fdtd_preset]);
     }
 
     if (toggle_is_down && (app->previous_toggle_is_down == false))
@@ -64,8 +235,14 @@ static void UpdateDebugInput (AppState *app)
         SetActiveRenderSource(app, app->fdtd_source_is_active == false);
     }
 
+    if (cycle_is_down && (app->previous_cycle_is_down == false))
+    {
+        CycleFdtdPreset(app);
+    }
+
     app->previous_space_is_down = space_is_down;
     app->previous_toggle_is_down = toggle_is_down;
+    app->previous_cycle_is_down = cycle_is_down;
 }
 
 static void RenderEngineBlock (
@@ -93,18 +270,13 @@ static void RenderEngineBlock (
 
 int App_Run (void)
 {
-    static const f64 TEST_COURANT_NUMBER = 0.9;
-
     AppState *app;
     AudioDeviceDesc audio_desc;
     AudioEngineDesc engine_desc;
-    Fdtd1DAreaSegmentDesc area_segment_descs[1];
-    Fdtd1DProbeDesc probe_descs[2];
-    Fdtd1DRenderSourceDesc fdtd_render_source_desc;
-    Fdtd1DSourceDesc source_descs[1];
     TestToneSourceDesc test_tone_desc;
     MemoryArena bootstrap_arena;
     WindowDesc window_desc;
+    FdtdPresetType preset_type;
 
     if (MemoryArena_Create(&bootstrap_arena, 1024 * 1024) == false)
     {
@@ -144,55 +316,40 @@ int App_Run (void)
         return 1;
     }
 
-    probe_descs[0].type = FDTD_1D_PROBE_TYPE_PRESSURE;
-    probe_descs[0].cell_index = 72;
-    probe_descs[0].output_channel_index = 0;
-    probe_descs[0].is_enabled = true;
-
-    probe_descs[1].type = FDTD_1D_PROBE_TYPE_PRESSURE;
-    probe_descs[1].cell_index = 104;
-    probe_descs[1].output_channel_index = 1;
-    probe_descs[1].is_enabled = true;
-
-    source_descs[0].cell_index = 24;
-    source_descs[0].is_enabled = true;
-
-    area_segment_descs[0].start_cell_index = 0;
-    area_segment_descs[0].end_cell_index = 20;
-    area_segment_descs[0].area_m2 = 0.006;
-
-    fdtd_render_source_desc.solver_desc.sample_rate = engine_desc.sample_rate;
-    fdtd_render_source_desc.solver_desc.block_frame_count = engine_desc.block_frame_count;
-    fdtd_render_source_desc.solver_desc.output_channel_count = engine_desc.channel_count;
-    fdtd_render_source_desc.solver_desc.tube_length_m = 128.0 * (343.0 / (TEST_COURANT_NUMBER * 48000.0));
-    fdtd_render_source_desc.solver_desc.wave_speed_m_per_s = 343.0;
-    fdtd_render_source_desc.solver_desc.density_kg_per_m3 = 1.225;
-    fdtd_render_source_desc.solver_desc.dx = 343.0 / (TEST_COURANT_NUMBER * 48000.0);
-    fdtd_render_source_desc.solver_desc.pressure_cell_count = 128;
-    fdtd_render_source_desc.solver_desc.velocity_cell_count = 129;
-    fdtd_render_source_desc.solver_desc.courant_number = TEST_COURANT_NUMBER;
-    fdtd_render_source_desc.solver_desc.uniform_area_m2 = 0.01;
-    fdtd_render_source_desc.solver_desc.uniform_loss = 0.00005;
-    fdtd_render_source_desc.solver_desc.area_segment_count = ARRAY_COUNT(area_segment_descs);
-    fdtd_render_source_desc.solver_desc.area_segment_descs = area_segment_descs;
-    fdtd_render_source_desc.solver_desc.left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
-    fdtd_render_source_desc.solver_desc.left_boundary.reflection_coefficient = -1.0;
-    fdtd_render_source_desc.solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
-    fdtd_render_source_desc.solver_desc.right_boundary.reflection_coefficient = 1.0;
-    fdtd_render_source_desc.solver_desc.probe_count = ARRAY_COUNT(probe_descs);
-    fdtd_render_source_desc.solver_desc.probe_descs = probe_descs;
-    fdtd_render_source_desc.solver_desc.source_count = ARRAY_COUNT(source_descs);
-    fdtd_render_source_desc.solver_desc.source_descs = source_descs;
-    fdtd_render_source_desc.startup_impulse_is_enabled = true;
-    fdtd_render_source_desc.startup_impulse_target_index = 0;
-    fdtd_render_source_desc.startup_impulse_amplitude = 0.25;
-
-    if (Fdtd1DRenderSource_Initialize(&app->fdtd_1d_render_source, &bootstrap_arena, &fdtd_render_source_desc) == false)
+    for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
     {
-        AudioEngine_Shutdown(&app->audio_engine);
-        PlatformWindow_Destroy(&app->main_window);
-        MemoryArena_Destroy(&bootstrap_arena);
-        return 1;
+        Fdtd1DAreaSegmentDesc area_segment_descs[2];
+        Fdtd1DProbeDesc probe_descs[2];
+        Fdtd1DRenderSourceDesc fdtd_render_source_desc;
+        Fdtd1DSourceDesc source_descs[1];
+        u32 area_segment_count;
+
+        BuildFdtdPresetDesc(
+            preset_type,
+            &engine_desc,
+            &fdtd_render_source_desc,
+            probe_descs,
+            source_descs,
+            area_segment_descs,
+            &area_segment_count
+        );
+
+        if (Fdtd1DRenderSource_Initialize(
+            &app->fdtd_render_sources[preset_type],
+            &bootstrap_arena,
+            &fdtd_render_source_desc
+        ) == false)
+        {
+            for (; preset_type > 0; preset_type = (FdtdPresetType) (preset_type - 1))
+            {
+                Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type - 1]);
+            }
+
+            AudioEngine_Shutdown(&app->audio_engine);
+            PlatformWindow_Destroy(&app->main_window);
+            MemoryArena_Destroy(&bootstrap_arena);
+            return 1;
+        }
     }
 
     test_tone_desc.frequency_hz = 220.0;
@@ -200,7 +357,10 @@ int App_Run (void)
 
     if (TestToneSource_Initialize(&app->test_tone_source, &test_tone_desc) == false)
     {
-        Fdtd1DRenderSource_Shutdown(&app->fdtd_1d_render_source);
+        for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+        {
+            Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type]);
+        }
         AudioEngine_Shutdown(&app->audio_engine);
         PlatformWindow_Destroy(&app->main_window);
         MemoryArena_Destroy(&bootstrap_arena);
@@ -209,6 +369,8 @@ int App_Run (void)
 
     app->previous_space_is_down = false;
     app->previous_toggle_is_down = false;
+    app->previous_cycle_is_down = false;
+    app->active_fdtd_preset = FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED;
     SetActiveRenderSource(app, true);
 
     audio_desc.sample_rate = 48000;
@@ -242,7 +404,10 @@ int App_Run (void)
     }
 
     AudioDevice_Close(&app->audio_device);
-    Fdtd1DRenderSource_Shutdown(&app->fdtd_1d_render_source);
+    for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+    {
+        Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type]);
+    }
     AudioEngine_Shutdown(&app->audio_engine);
     PlatformWindow_Destroy(&app->main_window);
     MemoryArena_Destroy(&bootstrap_arena);

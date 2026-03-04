@@ -21,5 +21,6 @@ typedef struct Window
 bool PlatformWindow_Create (Window *window, const WindowDesc *desc);
 void PlatformWindow_Destroy (Window *window);
 void PlatformWindow_PumpMessages (Window *window);
+void PlatformWindow_SetTitle (Window *window, const char *title);
 
 #endif // PM_ORGAN_PLATFORM_WINDOW_H
