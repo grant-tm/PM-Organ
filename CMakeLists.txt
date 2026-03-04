@@ -14,6 +14,7 @@ add_executable(pm_organ WIN32
     src/app/main.c
     src/core/frame_timer.c
     src/core/memory_arena.c
+    src/sim/fdtd_1d.c
     src/sim/simulation.c
     src/platform/win32/audio_device_wasapi.c
     src/platform/win32/time_win32.c

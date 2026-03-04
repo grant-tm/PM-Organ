@@ -1,0 +1,110 @@
+#ifndef PM_ORGAN_SIM_FDTD_1D_H
+#define PM_ORGAN_SIM_FDTD_1D_H
+
+#include "pm_organ/core/memory_arena.h"
+#include "pm_organ/core/types.h"
+#include "pm_organ/sim/simulation.h"
+
+typedef enum Fdtd1DBoundaryType
+{
+    FDTD_1D_BOUNDARY_TYPE_RIGID = 0,
+    FDTD_1D_BOUNDARY_TYPE_OPEN,
+    FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT,
+} Fdtd1DBoundaryType;
+
+typedef struct Fdtd1DBoundaryDesc
+{
+    Fdtd1DBoundaryType type;
+    f64 reflection_coefficient;
+} Fdtd1DBoundaryDesc;
+
+typedef struct Fdtd1DProbeDesc
+{
+    u32 cell_index;
+    u32 output_channel_index;
+    bool is_enabled;
+} Fdtd1DProbeDesc;
+
+typedef struct Fdtd1DSourceDesc
+{
+    u32 cell_index;
+    bool is_enabled;
+} Fdtd1DSourceDesc;
+
+typedef struct Fdtd1DDesc
+{
+    u32 sample_rate;
+    u32 block_frame_count;
+    u32 output_channel_count;
+
+    f64 tube_length_m;
+    f64 wave_speed_m_per_s;
+    f64 density_kg_per_m3;
+    f64 dx;
+
+    u32 pressure_cell_count;
+    u32 velocity_cell_count;
+    f64 courant_number;
+
+    f64 uniform_area_m2;
+    f64 uniform_loss;
+
+    Fdtd1DBoundaryDesc left_boundary;
+    Fdtd1DBoundaryDesc right_boundary;
+
+    u32 probe_count;
+    const Fdtd1DProbeDesc *probe_descs;
+
+    u32 source_count;
+    const Fdtd1DSourceDesc *source_descs;
+} Fdtd1DDesc;
+
+typedef struct Fdtd1DState
+{
+    u32 pressure_cell_count;
+    u32 velocity_cell_count;
+    u32 probe_count;
+    u32 source_count;
+
+    f64 dt;
+    f64 dx;
+    f64 wave_speed_m_per_s;
+    f64 density_kg_per_m3;
+    f64 courant_number;
+
+    f32 *pressure;
+    f32 *velocity;
+
+    f32 *area_pressure;
+    f32 *area_velocity;
+
+    f32 *pressure_loss;
+    f32 *velocity_loss;
+
+    f32 *pressure_update_coeff;
+    f32 *velocity_update_coeff;
+
+    u32 *probe_cell_indices;
+    u32 *probe_output_channels;
+
+    u32 *source_cell_indices;
+
+    f32 left_reflection_coefficient;
+    f32 right_reflection_coefficient;
+} Fdtd1DState;
+
+typedef struct Fdtd1D
+{
+    Simulation simulation;
+    Fdtd1DDesc desc;
+    Fdtd1DState *state;
+} Fdtd1D;
+
+bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc);
+bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *desc);
+void Fdtd1D_Shutdown (Fdtd1D *solver);
+void Fdtd1D_Reset (Fdtd1D *solver);
+Simulation *Fdtd1D_GetSimulation (Fdtd1D *solver);
+const Fdtd1DState *Fdtd1D_GetState (const Fdtd1D *solver);
+
+#endif // PM_ORGAN_SIM_FDTD_1D_H
