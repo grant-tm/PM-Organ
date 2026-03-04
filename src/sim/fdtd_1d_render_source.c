@@ -33,6 +33,8 @@ bool Fdtd1DRenderSource_Initialize (
     source->startup_impulse_is_pending = desc->startup_impulse_is_enabled;
     source->startup_impulse_target_index = desc->startup_impulse_target_index;
     source->startup_impulse_amplitude = desc->startup_impulse_amplitude;
+    source->excitation_mode = desc->excitation_mode;
+    source->drive_amplitude = desc->drive_amplitude;
     source->output_extraction_mode = desc->output_extraction_mode;
 
     return true;
@@ -61,6 +63,23 @@ void Fdtd1DRenderSource_SetOutputExtractionMode (
     ASSERT(source != NULL);
 
     source->output_extraction_mode = output_extraction_mode;
+}
+
+void Fdtd1DRenderSource_SetExcitationMode (
+    Fdtd1DRenderSource *source,
+    Fdtd1DExcitationMode excitation_mode
+)
+{
+    ASSERT(source != NULL);
+
+    source->excitation_mode = excitation_mode;
+}
+
+void Fdtd1DRenderSource_SetDriveAmplitude (Fdtd1DRenderSource *source, f64 drive_amplitude)
+{
+    ASSERT(source != NULL);
+
+    source->drive_amplitude = drive_amplitude;
 }
 
 void Fdtd1DRenderSource_Render (
@@ -95,6 +114,9 @@ void Fdtd1DRenderSource_Render (
     ASSERT(simulation->config.sample_rate == sample_rate);
     ASSERT(state != NULL);
 
+    /* Rebuild the excitation set every block so GUI changes take effect immediately. */
+    Simulation_ClearExcitations(simulation);
+
     if (source->startup_impulse_is_pending)
     {
         memset(&excitation, 0, sizeof(excitation));
@@ -107,6 +129,30 @@ void Fdtd1DRenderSource_Render (
         if (Simulation_QueueExcitation(simulation, &excitation))
         {
             source->startup_impulse_is_pending = false;
+        }
+    }
+
+    if (source->drive_amplitude > 0.0)
+    {
+        switch (source->excitation_mode)
+        {
+            case FDTD_1D_EXCITATION_MODE_IMPULSE:
+            {
+            } break;
+
+            case FDTD_1D_EXCITATION_MODE_CONSTANT:
+            case FDTD_1D_EXCITATION_MODE_NOISE:
+            {
+                memset(&excitation, 0, sizeof(excitation));
+                excitation.type = (source->excitation_mode == FDTD_1D_EXCITATION_MODE_CONSTANT) ?
+                    SIMULATION_EXCITATION_TYPE_CONSTANT :
+                    SIMULATION_EXCITATION_TYPE_NOISE;
+                excitation.target_index = source->startup_impulse_target_index;
+                excitation.remaining_frame_count = block_frame_count;
+                excitation.value = source->drive_amplitude;
+                excitation.is_active = true;
+                Simulation_QueueExcitation(simulation, &excitation);
+            } break;
         }
     }
 

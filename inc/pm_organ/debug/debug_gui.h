@@ -17,10 +17,14 @@ typedef struct DebugGui
 typedef struct DebugGuiFrameDesc
 {
     bool fdtd_source_is_active;
+    f32 drive_amplitude;
     u32 active_preset_index;
+    u32 active_excitation_mode;
+    u32 excitation_mode_count;
     u32 active_output_extraction_mode;
     u32 output_extraction_mode_count;
     u32 preset_count;
+    const char *const *excitation_mode_names;
     const char *const *output_extraction_mode_names;
     const char *const *preset_names;
     f64 delta_seconds;
@@ -31,10 +35,14 @@ typedef struct DebugGuiFrameActions
     bool request_trigger_impulse;
     bool request_use_fdtd_source;
     bool request_use_test_tone;
+    bool request_select_excitation_mode;
     bool request_select_output_extraction_mode;
     bool request_select_preset;
+    bool request_set_drive_amplitude;
+    u32 selected_excitation_mode;
     u32 selected_output_extraction_mode;
     u32 selected_preset_index;
+    f32 drive_amplitude;
 } DebugGuiFrameActions;
 
 bool DebugGui_Initialize (DebugGui *gui, MemoryArena *arena, Window *window);

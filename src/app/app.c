@@ -31,6 +31,14 @@ typedef enum AppOutputExtractionMode
     APP_OUTPUT_EXTRACTION_MODE_COUNT,
 } AppOutputExtractionMode;
 
+typedef enum AppExcitationMode
+{
+    APP_EXCITATION_MODE_IMPULSE = 0,
+    APP_EXCITATION_MODE_CONSTANT,
+    APP_EXCITATION_MODE_NOISE,
+    APP_EXCITATION_MODE_COUNT,
+} AppExcitationMode;
+
 typedef struct AppState
 {
     AudioDevice audio_device;
@@ -41,7 +49,9 @@ typedef struct AppState
     Window main_window;
     TestToneSource test_tone_source;
     FdtdPresetType active_fdtd_preset;
+    AppExcitationMode active_excitation_mode;
     AppOutputExtractionMode active_output_extraction_mode;
+    f32 drive_amplitude;
     bool fdtd_source_is_active;
     bool previous_space_is_down;
     bool previous_toggle_is_down;
@@ -61,6 +71,20 @@ static Fdtd1DOutputExtractionMode ToRenderSourceOutputExtractionMode (AppOutputE
     return FDTD_1D_OUTPUT_EXTRACTION_MODE_RAW_PROBES;
 }
 
+static Fdtd1DExcitationMode ToRenderSourceExcitationMode (AppExcitationMode app_mode)
+{
+    switch (app_mode)
+    {
+        case APP_EXCITATION_MODE_IMPULSE: return FDTD_1D_EXCITATION_MODE_IMPULSE;
+        case APP_EXCITATION_MODE_CONSTANT: return FDTD_1D_EXCITATION_MODE_CONSTANT;
+        case APP_EXCITATION_MODE_NOISE: return FDTD_1D_EXCITATION_MODE_NOISE;
+        case APP_EXCITATION_MODE_COUNT: break;
+    }
+
+    ASSERT(false);
+    return FDTD_1D_EXCITATION_MODE_IMPULSE;
+}
+
 static const char *GetFdtdPresetName (FdtdPresetType preset_type)
 {
     switch (preset_type)
@@ -70,6 +94,20 @@ static const char *GetFdtdPresetName (FdtdPresetType preset_type)
         case FDTD_PRESET_TYPE_WIDE_MOUTH_STOPPED: return "Wide Mouth";
         case FDTD_PRESET_TYPE_OPEN_PIPE: return "Open Pipe";
         case FDTD_PRESET_TYPE_COUNT: break;
+    }
+
+    ASSERT(false);
+    return "Unknown";
+}
+
+static const char *GetExcitationModeName (AppExcitationMode excitation_mode)
+{
+    switch (excitation_mode)
+    {
+        case APP_EXCITATION_MODE_IMPULSE: return "Impulse";
+        case APP_EXCITATION_MODE_CONSTANT: return "Constant";
+        case APP_EXCITATION_MODE_NOISE: return "Noise";
+        case APP_EXCITATION_MODE_COUNT: break;
     }
 
     ASSERT(false);
@@ -171,6 +209,8 @@ static void BuildFdtdPresetDesc (
     render_source_desc->solver_desc.probe_descs = probe_descs;
     render_source_desc->solver_desc.source_count = 1;
     render_source_desc->solver_desc.source_descs = source_descs;
+    render_source_desc->excitation_mode = FDTD_1D_EXCITATION_MODE_IMPULSE;
+    render_source_desc->drive_amplitude = 0.0;
     render_source_desc->output_extraction_mode = FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     render_source_desc->startup_impulse_is_enabled = true;
     render_source_desc->startup_impulse_target_index = 0;
@@ -259,6 +299,25 @@ static void ApplyOutputExtractionModeToSources (AppState *app)
     }
 }
 
+static void ApplyExcitationSettingsToSources (AppState *app)
+{
+    FdtdPresetType preset_type;
+
+    ASSERT(app != NULL);
+
+    for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+    {
+        Fdtd1DRenderSource_SetExcitationMode(
+            &app->fdtd_render_sources[preset_type],
+            ToRenderSourceExcitationMode(app->active_excitation_mode)
+        );
+        Fdtd1DRenderSource_SetDriveAmplitude(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->drive_amplitude
+        );
+    }
+}
+
 static void CycleFdtdPreset (AppState *app)
 {
     ASSERT(app != NULL);
@@ -303,6 +362,28 @@ static void SelectOutputExtractionMode (AppState *app, AppOutputExtractionMode o
 
     app->active_output_extraction_mode = output_extraction_mode;
     ApplyOutputExtractionModeToSources(app);
+}
+
+static void SelectExcitationMode (AppState *app, AppExcitationMode excitation_mode)
+{
+    ASSERT(app != NULL);
+    ASSERT(excitation_mode < APP_EXCITATION_MODE_COUNT);
+
+    app->active_excitation_mode = excitation_mode;
+    ApplyExcitationSettingsToSources(app);
+}
+
+static void SetDriveAmplitude (AppState *app, f32 drive_amplitude)
+{
+    ASSERT(app != NULL);
+
+    if (drive_amplitude < 0.0f)
+    {
+        drive_amplitude = 0.0f;
+    }
+
+    app->drive_amplitude = drive_amplitude;
+    ApplyExcitationSettingsToSources(app);
 }
 
 static void UpdateDebugInput (AppState *app)
@@ -475,7 +556,10 @@ int App_Run (void)
     app->previous_toggle_is_down = false;
     app->previous_cycle_is_down = false;
     app->active_fdtd_preset = FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED;
+    app->active_excitation_mode = APP_EXCITATION_MODE_IMPULSE;
     app->active_output_extraction_mode = APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
+    app->drive_amplitude = 0.0f;
+    ApplyExcitationSettingsToSources(app);
     ApplyOutputExtractionModeToSources(app);
     SetActiveRenderSource(app, true);
 
@@ -507,6 +591,7 @@ int App_Run (void)
     {
         DebugGuiFrameActions gui_actions;
         DebugGuiFrameDesc gui_frame_desc;
+        const char *excitation_mode_names[APP_EXCITATION_MODE_COUNT];
         const char *output_extraction_mode_names[APP_OUTPUT_EXTRACTION_MODE_COUNT];
         const char *preset_names[FDTD_PRESET_TYPE_COUNT];
 
@@ -518,14 +603,21 @@ int App_Run (void)
         {
             preset_names[preset_type] = GetFdtdPresetName(preset_type);
         }
+        excitation_mode_names[0] = GetExcitationModeName(APP_EXCITATION_MODE_IMPULSE);
+        excitation_mode_names[1] = GetExcitationModeName(APP_EXCITATION_MODE_CONSTANT);
+        excitation_mode_names[2] = GetExcitationModeName(APP_EXCITATION_MODE_NOISE);
         output_extraction_mode_names[0] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES);
         output_extraction_mode_names[1] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION);
 
         gui_frame_desc.fdtd_source_is_active = app->fdtd_source_is_active;
+        gui_frame_desc.drive_amplitude = app->drive_amplitude;
         gui_frame_desc.active_preset_index = app->active_fdtd_preset;
+        gui_frame_desc.active_excitation_mode = app->active_excitation_mode;
+        gui_frame_desc.excitation_mode_count = APP_EXCITATION_MODE_COUNT;
         gui_frame_desc.active_output_extraction_mode = app->active_output_extraction_mode;
         gui_frame_desc.output_extraction_mode_count = APP_OUTPUT_EXTRACTION_MODE_COUNT;
         gui_frame_desc.preset_count = FDTD_PRESET_TYPE_COUNT;
+        gui_frame_desc.excitation_mode_names = excitation_mode_names;
         gui_frame_desc.output_extraction_mode_names = output_extraction_mode_names;
         gui_frame_desc.preset_names = preset_names;
         gui_frame_desc.delta_seconds = app->frame_timer.delta_seconds;
@@ -548,9 +640,19 @@ int App_Run (void)
             SelectFdtdPreset(app, (FdtdPresetType) gui_actions.selected_preset_index);
         }
 
+        if (gui_actions.request_select_excitation_mode)
+        {
+            SelectExcitationMode(app, (AppExcitationMode) gui_actions.selected_excitation_mode);
+        }
+
         if (gui_actions.request_select_output_extraction_mode)
         {
             SelectOutputExtractionMode(app, (AppOutputExtractionMode) gui_actions.selected_output_extraction_mode);
+        }
+
+        if (gui_actions.request_set_drive_amplitude)
+        {
+            SetDriveAmplitude(app, gui_actions.drive_amplitude);
         }
 
         if (gui_actions.request_trigger_impulse)

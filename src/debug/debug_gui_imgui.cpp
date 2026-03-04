@@ -291,6 +291,7 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
     ASSERT(frame_desc != nullptr);
     ASSERT(frame_actions != nullptr);
     ASSERT(frame_desc->preset_names != nullptr);
+    ASSERT(frame_desc->excitation_mode_names != nullptr);
     ASSERT(frame_desc->output_extraction_mode_names != nullptr);
 
     internal = (DebugGuiInternal *) gui->internal_state;
@@ -318,6 +319,26 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
         if (ImGui::Button("Trigger Impulse"))
         {
             frame_actions->request_trigger_impulse = true;
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Excitation");
+        for (preset_index = 0; preset_index < frame_desc->excitation_mode_count; preset_index += 1)
+        {
+            bool is_selected;
+
+            is_selected = (preset_index == frame_desc->active_excitation_mode);
+            if (ImGui::Selectable(frame_desc->excitation_mode_names[preset_index], is_selected))
+            {
+                frame_actions->request_select_excitation_mode = true;
+                frame_actions->selected_excitation_mode = (u32) preset_index;
+            }
+        }
+
+        frame_actions->drive_amplitude = frame_desc->drive_amplitude;
+        if (ImGui::SliderFloat("Drive Amplitude", &frame_actions->drive_amplitude, 0.0f, 0.02f, "%.5f"))
+        {
+            frame_actions->request_set_drive_amplitude = true;
         }
 
         ImGui::Separator();
