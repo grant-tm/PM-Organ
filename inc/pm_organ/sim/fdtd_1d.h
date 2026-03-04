@@ -57,6 +57,20 @@ typedef struct Fdtd1DNonlinearMouthParameters
     u32 delay_samples;
 } Fdtd1DNonlinearMouthParameters;
 
+typedef struct Fdtd1DJetLabiumParameters
+{
+    f32 max_output;
+    f32 noise_scale;
+    f32 pressure_feedback;
+    f32 velocity_feedback;
+    f32 feedback_leak;
+    f32 jet_smoothing;
+    f32 labium_split_gain;
+    f32 saturation_gain;
+    f32 drive_limit;
+    u32 delay_samples;
+} Fdtd1DJetLabiumParameters;
+
 typedef struct Fdtd1DDesc
 {
     u32 sample_rate;
@@ -119,11 +133,13 @@ typedef struct Fdtd1DState
     u32 *probe_output_channels;
 
     u32 *source_cell_indices;
+    f32 *source_jet_state;
     f32 *mouth_feedback_delay_buffer;
     u32 *mouth_feedback_delay_lengths;
     u32 *mouth_feedback_delay_indices;
     u32 mouth_feedback_delay_capacity;
     Fdtd1DNonlinearMouthParameters nonlinear_mouth;
+    Fdtd1DJetLabiumParameters jet_labium;
 
     Fdtd1DBoundaryType left_boundary_type;
     Fdtd1DBoundaryType right_boundary_type;
@@ -156,6 +172,10 @@ void Fdtd1D_Reset (Fdtd1D *solver);
 bool Fdtd1D_SetNonlinearMouthParameters (
     Fdtd1D *solver,
     const Fdtd1DNonlinearMouthParameters *parameters
+);
+bool Fdtd1D_SetJetLabiumParameters (
+    Fdtd1D *solver,
+    const Fdtd1DJetLabiumParameters *parameters
 );
 Simulation *Fdtd1D_GetSimulation (Fdtd1D *solver);
 const Fdtd1DState *Fdtd1D_GetState (const Fdtd1D *solver);

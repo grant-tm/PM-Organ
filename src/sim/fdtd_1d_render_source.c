@@ -20,6 +20,7 @@ static const f64 FEEDBACK_NOISE_SCALE = 0.10;
 static const f64 FEEDBACK_PRESSURE_COEFFICIENT = 0.65;
 static const f64 FEEDBACK_VELOCITY_COEFFICIENT = 0.25;
 static const f64 MAX_SAFE_DRIVE_AMPLITUDE = 0.002;
+static const f64 MAX_SAFE_DRIVE_AMPLITUDE_JET_LABIUM = 0.0022;
 
 static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
 {
@@ -34,6 +35,11 @@ static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
     }
 
     return value;
+}
+
+static f64 ClampNonNegativeF64 (f64 value)
+{
+    return (value < 0.0) ? 0.0 : value;
 }
 
 static f64 ComputeSmoothedDriveAmplitude (f64 current_value, f64 target_value, f64 block_seconds)
@@ -160,6 +166,8 @@ bool Fdtd1DRenderSource_Initialize (
     source->source_coupling_mode = desc->source_coupling_mode;
     source->drive_amplitude = desc->drive_amplitude;
     source->smoothed_drive_amplitude = desc->drive_amplitude;
+    source->windchest_pressure = ClampNonNegativeF64(desc->windchest_pressure);
+    source->smoothed_windchest_pressure = source->windchest_pressure;
     source->output_extraction_mode = desc->output_extraction_mode;
 
     return true;
@@ -217,6 +225,13 @@ void Fdtd1DRenderSource_SetDriveAmplitude (Fdtd1DRenderSource *source, f64 drive
     source->drive_amplitude = drive_amplitude;
 }
 
+void Fdtd1DRenderSource_SetWindchestPressure (Fdtd1DRenderSource *source, f64 windchest_pressure)
+{
+    ASSERT(source != NULL);
+
+    source->windchest_pressure = ClampNonNegativeF64(windchest_pressure);
+}
+
 void Fdtd1DRenderSource_Render (
     void *user_data,
     f32 *output,
@@ -231,8 +246,10 @@ void Fdtd1DRenderSource_Render (
     Simulation *simulation;
     SimulationExcitation excitation;
     f64 block_seconds;
+    f64 effective_drive_amplitude;
     f64 feedback_signal;
     f64 smoothed_drive_amplitude;
+    f64 smoothed_windchest_pressure;
     usize frame_index;
     usize output_sample_count;
 
@@ -258,7 +275,14 @@ void Fdtd1DRenderSource_Render (
         source->drive_amplitude,
         block_seconds
     );
+    source->smoothed_windchest_pressure = ComputeSmoothedDriveAmplitude(
+        source->smoothed_windchest_pressure,
+        source->windchest_pressure,
+        block_seconds
+    );
     smoothed_drive_amplitude = source->smoothed_drive_amplitude;
+    smoothed_windchest_pressure = source->smoothed_windchest_pressure;
+    effective_drive_amplitude = smoothed_drive_amplitude * smoothed_windchest_pressure;
     feedback_signal = ComputeAverageMouthFeedbackSignal(simulation, state);
 
     /* Rebuild the excitation set every block so GUI changes take effect immediately. */
@@ -279,7 +303,7 @@ void Fdtd1DRenderSource_Render (
         }
     }
 
-    if (smoothed_drive_amplitude > 0.0)
+    if (effective_drive_amplitude > 0.0)
     {
         switch (source->excitation_mode)
         {
@@ -296,7 +320,7 @@ void Fdtd1DRenderSource_Render (
                 );
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = smoothed_drive_amplitude;
+                excitation.value = effective_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;
@@ -310,7 +334,7 @@ void Fdtd1DRenderSource_Render (
                 );
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = smoothed_drive_amplitude;
+                excitation.value = effective_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;
@@ -333,7 +357,7 @@ void Fdtd1DRenderSource_Render (
                 excitation.type = constant_type;
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = smoothed_drive_amplitude;
+                excitation.value = effective_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
 
@@ -341,7 +365,7 @@ void Fdtd1DRenderSource_Render (
                 excitation.type = noise_type;
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = smoothed_drive_amplitude * BIAS_AND_NOISE_NOISE_SCALE;
+                excitation.value = effective_drive_amplitude * BIAS_AND_NOISE_NOISE_SCALE;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;
@@ -361,7 +385,7 @@ void Fdtd1DRenderSource_Render (
                     FDTD_1D_EXCITATION_MODE_NOISE
                 );
 
-                feedback_drive_amplitude = smoothed_drive_amplitude - feedback_signal;
+                feedback_drive_amplitude = effective_drive_amplitude - feedback_signal;
                 feedback_drive_amplitude = ClampF64(
                     feedback_drive_amplitude,
                     0.0,
@@ -389,10 +413,29 @@ void Fdtd1DRenderSource_Render (
             {
                 f64 bounded_drive_amplitude;
 
-                bounded_drive_amplitude = ClampF64(smoothed_drive_amplitude, 0.0, MAX_SAFE_DRIVE_AMPLITUDE);
+                bounded_drive_amplitude = ClampF64(effective_drive_amplitude, 0.0, MAX_SAFE_DRIVE_AMPLITUDE);
 
                 memset(&excitation, 0, sizeof(excitation));
                 excitation.type = SIMULATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+                excitation.target_index = source->startup_impulse_target_index;
+                excitation.remaining_frame_count = block_frame_count;
+                excitation.value = bounded_drive_amplitude;
+                excitation.is_active = true;
+                Simulation_QueueExcitation(simulation, &excitation);
+            } break;
+
+            case FDTD_1D_EXCITATION_MODE_JET_LABIUM:
+            {
+                f64 bounded_drive_amplitude;
+
+                bounded_drive_amplitude = ClampF64(
+                    effective_drive_amplitude,
+                    0.0,
+                    MAX_SAFE_DRIVE_AMPLITUDE_JET_LABIUM
+                );
+
+                memset(&excitation, 0, sizeof(excitation));
+                excitation.type = SIMULATION_EXCITATION_TYPE_JET_LABIUM;
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
                 excitation.value = bounded_drive_amplitude;

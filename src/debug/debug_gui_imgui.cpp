@@ -341,6 +341,12 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
             frame_actions->request_set_drive_amplitude = true;
         }
 
+        frame_actions->windchest_pressure = frame_desc->windchest_pressure;
+        if (ImGui::SliderFloat("Windchest Pressure", &frame_actions->windchest_pressure, 0.0f, 2.0f, "%.3f"))
+        {
+            frame_actions->request_set_windchest_pressure = true;
+        }
+
         ImGui::Separator();
         ImGui::Text("Output");
         frame_actions->master_gain = frame_desc->master_gain;

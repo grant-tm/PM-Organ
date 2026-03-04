@@ -9,6 +9,8 @@
 
 #define MODE_COUNT 5
 
+static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc);
+
 typedef struct VerificationResult
 {
     u32 first_arrival_frame;
@@ -73,6 +75,10 @@ typedef struct SustainedAnalysisResult
     f64 late_dominant_frequency_b_hz;
     f64 dominant_frequency_drift_hz;
     f64 late_to_early_rms_ratio;
+    f64 late_spectral_centroid_hz;
+    f64 late_spectral_flatness;
+    f64 late_harmonic_energy_ratio;
+    f64 late_spectral_flux;
 } SustainedAnalysisResult;
 
 typedef enum VerificationExcitationType
@@ -81,6 +87,7 @@ typedef enum VerificationExcitationType
     VERIFICATION_EXCITATION_TYPE_NOISE_BURST,
     VERIFICATION_EXCITATION_TYPE_CONSTANT,
     VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH,
+    VERIFICATION_EXCITATION_TYPE_JET_LABIUM,
 } VerificationExcitationType;
 
 typedef enum VerificationPreset
@@ -145,6 +152,10 @@ typedef struct NonlinearMouthSweepResult
     f64 early_rms;
     f64 late_to_early_rms_ratio;
     f64 dominant_frequency_drift_hz;
+    f64 late_spectral_centroid_hz;
+    f64 late_spectral_flatness;
+    f64 late_harmonic_energy_ratio;
+    f64 late_spectral_flux;
     f64 max_output_abs;
     f64 energy_drift;
     bool early_rms_ok;
@@ -254,6 +265,7 @@ static const char *GetExcitationTypeName (VerificationExcitationType excitation_
         case VERIFICATION_EXCITATION_TYPE_NOISE_BURST: return "noise-burst";
         case VERIFICATION_EXCITATION_TYPE_CONSTANT: return "constant";
         case VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH: return "nonlinear-mouth";
+        case VERIFICATION_EXCITATION_TYPE_JET_LABIUM: return "jet-labium";
     }
 
     ASSERT(false);
@@ -494,6 +506,12 @@ static bool TryParseExcitationTypeName (const char *text, VerificationExcitation
     if ((_stricmp(text, "nonlinear-mouth") == 0) || (_stricmp(text, "mouth") == 0))
     {
         *excitation_type = VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+        return true;
+    }
+
+    if ((_stricmp(text, "jet-labium") == 0) || (_stricmp(text, "jet") == 0))
+    {
+        *excitation_type = VERIFICATION_EXCITATION_TYPE_JET_LABIUM;
         return true;
     }
 
@@ -1121,6 +1139,224 @@ static f64 FindDominantFrequencyInRange (
     return best_frequency_hz;
 }
 
+static void ComputeSpectralQualityMetrics (
+    const SimulationOfflineCapture *capture,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 sample_rate,
+    f64 frequency_start_hz,
+    f64 frequency_end_hz,
+    f64 frequency_step_hz,
+    f64 *centroid_hz,
+    f64 *flatness,
+    f64 *total_energy
+)
+{
+    static const f64 EPSILON = 1e-12;
+    f64 bin_count;
+    f64 energy_sum;
+    f64 log_sum;
+    f64 weighted_frequency_sum;
+    f64 frequency_hz;
+
+    ASSERT(capture != NULL);
+    ASSERT(capture->samples != NULL);
+    ASSERT(analysis_channel_index < capture->channel_count);
+    ASSERT(sample_rate > 0.0);
+    ASSERT(frequency_step_hz > 0.0);
+    ASSERT(frequency_start_hz <= frequency_end_hz);
+    ASSERT(centroid_hz != NULL);
+    ASSERT(flatness != NULL);
+    ASSERT(total_energy != NULL);
+
+    bin_count = 0.0;
+    energy_sum = 0.0;
+    weighted_frequency_sum = 0.0;
+    log_sum = 0.0;
+
+    for (frequency_hz = frequency_start_hz;
+         frequency_hz <= frequency_end_hz;
+         frequency_hz += frequency_step_hz)
+    {
+        f64 magnitude;
+        f64 power;
+
+        magnitude = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            start_frame,
+            end_frame,
+            sample_rate,
+            frequency_hz
+        );
+        power = (magnitude * magnitude) + EPSILON;
+        energy_sum += power;
+        weighted_frequency_sum += frequency_hz * power;
+        log_sum += log(power);
+        bin_count += 1.0;
+    }
+
+    *total_energy = energy_sum;
+    if (energy_sum > EPSILON)
+    {
+        *centroid_hz = weighted_frequency_sum / energy_sum;
+    }
+    else
+    {
+        *centroid_hz = frequency_start_hz;
+    }
+
+    if (bin_count > 0.0)
+    {
+        f64 geometric_mean;
+        f64 arithmetic_mean;
+
+        geometric_mean = exp(log_sum / bin_count);
+        arithmetic_mean = energy_sum / bin_count;
+        *flatness = geometric_mean / (arithmetic_mean + EPSILON);
+    }
+    else
+    {
+        *flatness = 0.0;
+    }
+}
+
+static f64 ComputeHarmonicEnergyRatio (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 sample_rate,
+    f64 frequency_start_hz,
+    f64 frequency_end_hz
+)
+{
+    static const f64 EPSILON = 1e-12;
+    f64 expected_frequency_hz;
+    f64 fundamental_frequency_hz;
+    f64 harmonic_energy_sum;
+    f64 total_energy;
+    f64 unused_centroid;
+    f64 unused_flatness;
+    u32 harmonic_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(desc != NULL);
+
+    ComputeSpectralQualityMetrics(
+        capture,
+        analysis_channel_index,
+        start_frame,
+        end_frame,
+        sample_rate,
+        frequency_start_hz,
+        frequency_end_hz,
+        2.0,
+        &unused_centroid,
+        &unused_flatness,
+        &total_energy
+    );
+
+    harmonic_energy_sum = 0.0;
+    fundamental_frequency_hz = GetFundamentalFrequencyHz(desc);
+    for (harmonic_index = 1; harmonic_index <= MODE_COUNT; harmonic_index += 1)
+    {
+        f64 harmonic_multiplier;
+        f64 harmonic_magnitude;
+
+        if (((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN) &&
+             (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID)) ||
+            ((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID) &&
+             (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)))
+        {
+            harmonic_multiplier = (f64) (2 * (i32) harmonic_index - 1);
+        }
+        else
+        {
+            harmonic_multiplier = (f64) harmonic_index;
+        }
+
+        expected_frequency_hz = fundamental_frequency_hz * harmonic_multiplier;
+        if ((expected_frequency_hz < frequency_start_hz) || (expected_frequency_hz > frequency_end_hz))
+        {
+            continue;
+        }
+
+        harmonic_magnitude = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            start_frame,
+            end_frame,
+            sample_rate,
+            expected_frequency_hz
+        );
+        harmonic_energy_sum += harmonic_magnitude * harmonic_magnitude;
+    }
+
+    return harmonic_energy_sum / (total_energy + EPSILON);
+}
+
+static f64 ComputeSpectralFlux (
+    const SimulationOfflineCapture *capture,
+    u32 analysis_channel_index,
+    u32 start_frame_a,
+    u32 end_frame_a,
+    u32 start_frame_b,
+    u32 end_frame_b,
+    f64 sample_rate,
+    f64 frequency_start_hz,
+    f64 frequency_end_hz,
+    f64 frequency_step_hz
+)
+{
+    static const f64 EPSILON = 1e-12;
+    f64 energy_sum_a;
+    f64 flux_sum;
+    f64 frequency_hz;
+
+    ASSERT(capture != NULL);
+    ASSERT(capture->samples != NULL);
+
+    energy_sum_a = 0.0;
+    flux_sum = 0.0;
+    for (frequency_hz = frequency_start_hz;
+         frequency_hz <= frequency_end_hz;
+         frequency_hz += frequency_step_hz)
+    {
+        f64 magnitude_a;
+        f64 magnitude_b;
+        f64 power_a;
+        f64 power_b;
+        f64 delta;
+
+        magnitude_a = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            start_frame_a,
+            end_frame_a,
+            sample_rate,
+            frequency_hz
+        );
+        magnitude_b = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            start_frame_b,
+            end_frame_b,
+            sample_rate,
+            frequency_hz
+        );
+        power_a = magnitude_a * magnitude_a;
+        power_b = magnitude_b * magnitude_b;
+        delta = power_b - power_a;
+        flux_sum += delta * delta;
+        energy_sum_a += power_a;
+    }
+
+    return sqrt(flux_sum / (energy_sum_a + EPSILON));
+}
+
 static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc)
 {
     ASSERT(desc != NULL);
@@ -1150,6 +1386,7 @@ static void AnalyzeSustainedBehavior (
 {
     static const f64 RMS_EPSILON = 1e-9;
 
+    f64 spectral_energy;
     f64 frequency_end_hz;
     f64 frequency_start_hz;
     f64 fundamental_frequency_hz;
@@ -1235,6 +1472,45 @@ static void AnalyzeSustainedBehavior (
     );
     result->dominant_frequency_drift_hz =
         fabs(result->late_dominant_frequency_b_hz - result->late_dominant_frequency_a_hz);
+
+    ComputeSpectralQualityMetrics(
+        capture,
+        analysis_channel_index,
+        result->late_start_frame,
+        result->late_end_frame,
+        (f64) desc->sample_rate,
+        frequency_start_hz,
+        frequency_end_hz,
+        2.0,
+        &result->late_spectral_centroid_hz,
+        &result->late_spectral_flatness,
+        &spectral_energy
+    );
+    (void) spectral_energy;
+
+    result->late_harmonic_energy_ratio = ComputeHarmonicEnergyRatio(
+        capture,
+        desc,
+        analysis_channel_index,
+        result->late_start_frame,
+        result->late_end_frame,
+        (f64) desc->sample_rate,
+        frequency_start_hz,
+        frequency_end_hz
+    );
+
+    result->late_spectral_flux = ComputeSpectralFlux(
+        capture,
+        analysis_channel_index,
+        result->late_window_a_start_frame,
+        result->late_window_a_end_frame,
+        result->late_window_b_start_frame,
+        result->late_window_b_end_frame,
+        (f64) desc->sample_rate,
+        frequency_start_hz,
+        frequency_end_hz,
+        2.0
+    );
 }
 
 static void AnalyzeModeSeries (
@@ -1439,6 +1715,13 @@ static bool RunVerification (
         case VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH:
         {
             excitation.type = SIMULATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+            excitation.remaining_frame_count = settings->block_count * solver_desc->block_frame_count;
+            excitation.value = SUSTAINED_DRIVE_AMPLITUDE;
+        } break;
+
+        case VERIFICATION_EXCITATION_TYPE_JET_LABIUM:
+        {
+            excitation.type = SIMULATION_EXCITATION_TYPE_JET_LABIUM;
             excitation.remaining_frame_count = settings->block_count * solver_desc->block_frame_count;
             excitation.value = SUSTAINED_DRIVE_AMPLITUDE;
         } break;
@@ -1672,6 +1955,14 @@ int main (int argc, char **argv)
                 summary.sustained.late_to_early_rms_ratio;
             nonlinear_mouth_sweep_results[sweep_result_count].dominant_frequency_drift_hz =
                 summary.sustained.dominant_frequency_drift_hz;
+            nonlinear_mouth_sweep_results[sweep_result_count].late_spectral_centroid_hz =
+                summary.sustained.late_spectral_centroid_hz;
+            nonlinear_mouth_sweep_results[sweep_result_count].late_spectral_flatness =
+                summary.sustained.late_spectral_flatness;
+            nonlinear_mouth_sweep_results[sweep_result_count].late_harmonic_energy_ratio =
+                summary.sustained.late_harmonic_energy_ratio;
+            nonlinear_mouth_sweep_results[sweep_result_count].late_spectral_flux =
+                summary.sustained.late_spectral_flux;
             nonlinear_mouth_sweep_results[sweep_result_count].max_output_abs =
                 summary.stats.max_abs_output;
             nonlinear_mouth_sweep_results[sweep_result_count].energy_drift =
@@ -1716,15 +2007,19 @@ int main (int argc, char **argv)
         printf("  abs_energy_drift:       <= 1.0\n");
         printf("\n");
         printf("Sweep Results\n");
-        printf("  scale    early_rms  late/early_rms   freq_drift_hz   max_output_abs   energy_drift    stable\n");
+        printf("  scale    early_rms  late/early_rms   freq_drift_hz   centroid_hz   harmonic_ratio   flatness    flux       max_output_abs   energy_drift    stable\n");
         for (block_index = 0; block_index < sweep_result_count; block_index += 1)
         {
             printf(
-                "  %-8.3f %-10.6f %-15.6f %-15.3f %-15.6f %-13.9f %s\n",
+                "  %-8.3f %-10.6f %-15.6f %-15.3f %-12.2f %-15.6f %-11.6f %-10.6f %-15.6f %-13.9f %s\n",
                 nonlinear_mouth_sweep_results[block_index].feedback_scale,
                 nonlinear_mouth_sweep_results[block_index].early_rms,
                 nonlinear_mouth_sweep_results[block_index].late_to_early_rms_ratio,
                 nonlinear_mouth_sweep_results[block_index].dominant_frequency_drift_hz,
+                nonlinear_mouth_sweep_results[block_index].late_spectral_centroid_hz,
+                nonlinear_mouth_sweep_results[block_index].late_harmonic_energy_ratio,
+                nonlinear_mouth_sweep_results[block_index].late_spectral_flatness,
+                nonlinear_mouth_sweep_results[block_index].late_spectral_flux,
                 nonlinear_mouth_sweep_results[block_index].max_output_abs,
                 nonlinear_mouth_sweep_results[block_index].energy_drift,
                 nonlinear_mouth_sweep_results[block_index].is_stable_candidate ? "yes" : "no"
@@ -2016,6 +2311,18 @@ int main (int argc, char **argv)
     );
     printf("  dominant_freq_drift_hz: %.2f\n",
         summary.sustained.dominant_frequency_drift_hz
+    );
+    printf("  late_spectral_centroid: %.2f\n",
+        summary.sustained.late_spectral_centroid_hz
+    );
+    printf("  late_harmonic_ratio:    %.6f\n",
+        summary.sustained.late_harmonic_energy_ratio
+    );
+    printf("  late_spectral_flatness: %.6f\n",
+        summary.sustained.late_spectral_flatness
+    );
+    printf("  late_spectral_flux:     %.6f\n",
+        summary.sustained.late_spectral_flux
     );
     printf("  early_rms_gate:         %s\n",
         EvaluateEarlyRmsGate(summary.sustained.early_rms) ? "pass" : "fail"

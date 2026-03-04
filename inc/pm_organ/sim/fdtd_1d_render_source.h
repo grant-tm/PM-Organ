@@ -19,6 +19,7 @@ typedef enum Fdtd1DExcitationMode
     FDTD_1D_EXCITATION_MODE_BIAS_AND_NOISE,
     FDTD_1D_EXCITATION_MODE_FEEDBACK_MOUTH,
     FDTD_1D_EXCITATION_MODE_NONLINEAR_MOUTH,
+    FDTD_1D_EXCITATION_MODE_JET_LABIUM,
 } Fdtd1DExcitationMode;
 
 typedef enum Fdtd1DSourceCouplingMode
@@ -33,6 +34,7 @@ typedef struct Fdtd1DRenderSourceDesc
     Fdtd1DExcitationMode excitation_mode;
     Fdtd1DSourceCouplingMode source_coupling_mode;
     f64 drive_amplitude;
+    f64 windchest_pressure;
     Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_enabled;
     u32 startup_impulse_target_index;
@@ -46,6 +48,8 @@ typedef struct Fdtd1DRenderSource
     Fdtd1DSourceCouplingMode source_coupling_mode;
     f64 drive_amplitude;
     f64 smoothed_drive_amplitude;
+    f64 windchest_pressure;
+    f64 smoothed_windchest_pressure;
     Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_pending;
     u32 startup_impulse_target_index;
@@ -72,6 +76,7 @@ void Fdtd1DRenderSource_SetSourceCouplingMode (
     Fdtd1DSourceCouplingMode source_coupling_mode
 );
 void Fdtd1DRenderSource_SetDriveAmplitude (Fdtd1DRenderSource *source, f64 drive_amplitude);
+void Fdtd1DRenderSource_SetWindchestPressure (Fdtd1DRenderSource *source, f64 windchest_pressure);
 void Fdtd1DRenderSource_Render (
     void *user_data,
     f32 *output,

@@ -39,6 +39,7 @@ typedef enum AppExcitationMode
     APP_EXCITATION_MODE_BIAS_AND_NOISE,
     APP_EXCITATION_MODE_FEEDBACK_MOUTH,
     APP_EXCITATION_MODE_NONLINEAR_MOUTH,
+    APP_EXCITATION_MODE_JET_LABIUM,
     APP_EXCITATION_MODE_COUNT,
 } AppExcitationMode;
 
@@ -63,6 +64,7 @@ typedef struct AppState
     AppSourceCouplingMode active_source_coupling_mode;
     AppOutputExtractionMode active_output_extraction_mode;
     f32 drive_amplitude;
+    f32 windchest_pressure;
     f32 master_gain;
     bool output_is_muted;
     bool fdtd_source_is_active;
@@ -94,6 +96,7 @@ static Fdtd1DExcitationMode ToRenderSourceExcitationMode (AppExcitationMode app_
         case APP_EXCITATION_MODE_BIAS_AND_NOISE: return FDTD_1D_EXCITATION_MODE_BIAS_AND_NOISE;
         case APP_EXCITATION_MODE_FEEDBACK_MOUTH: return FDTD_1D_EXCITATION_MODE_FEEDBACK_MOUTH;
         case APP_EXCITATION_MODE_NONLINEAR_MOUTH: return FDTD_1D_EXCITATION_MODE_NONLINEAR_MOUTH;
+        case APP_EXCITATION_MODE_JET_LABIUM: return FDTD_1D_EXCITATION_MODE_JET_LABIUM;
         case APP_EXCITATION_MODE_COUNT: break;
     }
 
@@ -139,6 +142,7 @@ static const char *GetExcitationModeName (AppExcitationMode excitation_mode)
         case APP_EXCITATION_MODE_BIAS_AND_NOISE: return "Bias + Noise";
         case APP_EXCITATION_MODE_FEEDBACK_MOUTH: return "Feedback Mouth";
         case APP_EXCITATION_MODE_NONLINEAR_MOUTH: return "Nonlinear Mouth";
+        case APP_EXCITATION_MODE_JET_LABIUM: return "Jet Labium";
         case APP_EXCITATION_MODE_COUNT: break;
     }
 
@@ -257,6 +261,7 @@ static void BuildFdtdPresetDesc (
     render_source_desc->excitation_mode = FDTD_1D_EXCITATION_MODE_IMPULSE;
     render_source_desc->source_coupling_mode = FDTD_1D_SOURCE_COUPLING_MODE_PRESSURE;
     render_source_desc->drive_amplitude = 0.0;
+    render_source_desc->windchest_pressure = 1.0;
     render_source_desc->output_extraction_mode = FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     render_source_desc->startup_impulse_is_enabled = true;
     render_source_desc->startup_impulse_target_index = 0;
@@ -365,6 +370,10 @@ static void ApplyExcitationSettingsToSources (AppState *app)
             &app->fdtd_render_sources[preset_type],
             (f64) app->drive_amplitude
         );
+        Fdtd1DRenderSource_SetWindchestPressure(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->windchest_pressure
+        );
     }
 }
 
@@ -442,6 +451,19 @@ static void SetDriveAmplitude (AppState *app, f32 drive_amplitude)
     }
 
     app->drive_amplitude = drive_amplitude;
+    ApplyExcitationSettingsToSources(app);
+}
+
+static void SetWindchestPressure (AppState *app, f32 windchest_pressure)
+{
+    ASSERT(app != NULL);
+
+    if (windchest_pressure < 0.0f)
+    {
+        windchest_pressure = 0.0f;
+    }
+
+    app->windchest_pressure = windchest_pressure;
     ApplyExcitationSettingsToSources(app);
 }
 
@@ -619,6 +641,7 @@ int App_Run (void)
     app->active_source_coupling_mode = APP_SOURCE_COUPLING_MODE_PRESSURE;
     app->active_output_extraction_mode = APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     app->drive_amplitude = 0.0f;
+    app->windchest_pressure = 1.0f;
     app->master_gain = 0.35f;
     app->output_is_muted = false;
     AudioEngine_SetMasterGain(&app->audio_engine, app->master_gain);
@@ -674,6 +697,7 @@ int App_Run (void)
         excitation_mode_names[3] = GetExcitationModeName(APP_EXCITATION_MODE_BIAS_AND_NOISE);
         excitation_mode_names[4] = GetExcitationModeName(APP_EXCITATION_MODE_FEEDBACK_MOUTH);
         excitation_mode_names[5] = GetExcitationModeName(APP_EXCITATION_MODE_NONLINEAR_MOUTH);
+        excitation_mode_names[6] = GetExcitationModeName(APP_EXCITATION_MODE_JET_LABIUM);
         source_coupling_mode_names[0] = GetSourceCouplingModeName(APP_SOURCE_COUPLING_MODE_PRESSURE);
         source_coupling_mode_names[1] = GetSourceCouplingModeName(APP_SOURCE_COUPLING_MODE_VELOCITY);
         output_extraction_mode_names[0] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES);
@@ -682,6 +706,7 @@ int App_Run (void)
         gui_frame_desc.fdtd_source_is_active = app->fdtd_source_is_active;
         gui_frame_desc.output_is_muted = app->output_is_muted;
         gui_frame_desc.drive_amplitude = app->drive_amplitude;
+        gui_frame_desc.windchest_pressure = app->windchest_pressure;
         gui_frame_desc.master_gain = app->master_gain;
         gui_frame_desc.active_preset_index = app->active_fdtd_preset;
         gui_frame_desc.active_excitation_mode = app->active_excitation_mode;
@@ -733,6 +758,11 @@ int App_Run (void)
         if (gui_actions.request_set_drive_amplitude)
         {
             SetDriveAmplitude(app, gui_actions.drive_amplitude);
+        }
+
+        if (gui_actions.request_set_windchest_pressure)
+        {
+            SetWindchestPressure(app, gui_actions.windchest_pressure);
         }
 
         if (gui_actions.request_set_master_gain)
