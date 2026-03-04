@@ -154,6 +154,41 @@ static bool ValidateSourceDescs (const Fdtd1DDesc *desc)
     return true;
 }
 
+static bool ValidateAreaSegmentDescs (const Fdtd1DDesc *desc)
+{
+    u32 segment_index;
+
+    ASSERT(desc != NULL);
+
+    if ((desc->area_segment_count > 0) && (desc->area_segment_descs == NULL))
+    {
+        return false;
+    }
+
+    for (segment_index = 0; segment_index < desc->area_segment_count; segment_index += 1)
+    {
+        const Fdtd1DAreaSegmentDesc *segment_desc;
+
+        segment_desc = &desc->area_segment_descs[segment_index];
+        if (segment_desc->start_cell_index >= segment_desc->end_cell_index)
+        {
+            return false;
+        }
+
+        if (segment_desc->end_cell_index > desc->pressure_cell_count)
+        {
+            return false;
+        }
+
+        if (segment_desc->area_m2 <= 0.0)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void BuildSimulationConfig (const Fdtd1DDesc *desc, SimulationConfig *config)
 {
     usize scratch_sample_count;
@@ -219,7 +254,9 @@ static void InjectDistributedPressureImpulse (Fdtd1DState *state, u32 cell_index
 }
 
 static f32 FilterOpenBoundaryReflection (
-    const Fdtd1DState *state,
+    f32 filter_a1,
+    f32 filter_b0,
+    f32 filter_b1,
     f32 outgoing_pressure,
     f32 *previous_outgoing_pressure,
     f32 *previous_incoming_pressure
@@ -227,19 +264,118 @@ static f32 FilterOpenBoundaryReflection (
 {
     f32 incoming_pressure;
 
-    ASSERT(state != NULL);
     ASSERT(previous_outgoing_pressure != NULL);
     ASSERT(previous_incoming_pressure != NULL);
 
     incoming_pressure =
-        -state->open_reflection_filter_a1 * (*previous_incoming_pressure) +
-        state->open_reflection_filter_b0 * outgoing_pressure +
-        state->open_reflection_filter_b1 * (*previous_outgoing_pressure);
+        -filter_a1 * (*previous_incoming_pressure) +
+        filter_b0 * outgoing_pressure +
+        filter_b1 * (*previous_outgoing_pressure);
 
     *previous_outgoing_pressure = outgoing_pressure;
     *previous_incoming_pressure = incoming_pressure;
 
     return incoming_pressure;
+}
+
+static void InitializeAreaFields (Fdtd1DState *state, const Fdtd1DDesc *desc)
+{
+    u32 cell_index;
+    u32 segment_index;
+
+    ASSERT(state != NULL);
+    ASSERT(desc != NULL);
+    ASSERT(state->pressure_cell_count == desc->pressure_cell_count);
+    ASSERT(state->velocity_cell_count == desc->velocity_cell_count);
+
+    InitializeUniformField(state->area_pressure, desc->pressure_cell_count, (f32) desc->uniform_area_m2);
+
+    for (segment_index = 0; segment_index < desc->area_segment_count; segment_index += 1)
+    {
+        const Fdtd1DAreaSegmentDesc *segment_desc;
+
+        segment_desc = &desc->area_segment_descs[segment_index];
+        for (cell_index = segment_desc->start_cell_index; cell_index < segment_desc->end_cell_index; cell_index += 1)
+        {
+            state->area_pressure[cell_index] = (f32) segment_desc->area_m2;
+        }
+    }
+
+    state->area_velocity[0] = state->area_pressure[0];
+    for (cell_index = 1; cell_index < (state->velocity_cell_count - 1); cell_index += 1)
+    {
+        state->area_velocity[cell_index] =
+            0.5f * (state->area_pressure[cell_index - 1] + state->area_pressure[cell_index]);
+    }
+    state->area_velocity[state->velocity_cell_count - 1] =
+        state->area_pressure[state->pressure_cell_count - 1];
+}
+
+static void InitializePressureUpdateCoefficients (Fdtd1DState *state)
+{
+    f64 pressure_update_numerator;
+    u32 pressure_index;
+
+    ASSERT(state != NULL);
+
+    pressure_update_numerator =
+        state->density_kg_per_m3 * state->wave_speed_m_per_s * state->wave_speed_m_per_s * state->dt;
+
+    for (pressure_index = 0; pressure_index < state->pressure_cell_count; pressure_index += 1)
+    {
+        state->pressure_update_coeff[pressure_index] = (f32) (
+            pressure_update_numerator / (state->dx * (f64) state->area_pressure[pressure_index])
+        );
+    }
+}
+
+static void InitializeOpenBoundaryFilter (
+    const Fdtd1DState *state,
+    f32 boundary_area_m2,
+    f32 *filter_a1,
+    f32 *filter_b0,
+    f32 *filter_b1
+)
+{
+    f64 bilinear_scale;
+    f64 denominator_0;
+    f64 denominator_1;
+    f64 end_correction_m;
+    f64 pipe_radius_m;
+    f64 radiation_inertance;
+    f64 radiation_resistance;
+    f64 reflection_denominator_constant;
+    f64 reflection_denominator_slope;
+    f64 reflection_numerator_constant;
+    f64 reflection_numerator_slope;
+
+    ASSERT(state != NULL);
+    ASSERT(filter_a1 != NULL);
+    ASSERT(filter_b0 != NULL);
+    ASSERT(filter_b1 != NULL);
+    ASSERT(boundary_area_m2 > 0.0f);
+
+    pipe_radius_m = sqrt((f64) boundary_area_m2 / FDTD_1D_PI);
+    end_correction_m = OPEN_END_CORRECTION_COEFFICIENT * pipe_radius_m;
+    radiation_inertance = state->density_kg_per_m3 * end_correction_m;
+    radiation_resistance = OPEN_END_RADIATION_RESISTANCE_SCALE * state->characteristic_impedance;
+    bilinear_scale = 2.0 / state->dt;
+
+    reflection_numerator_slope =
+        (radiation_resistance - state->characteristic_impedance) * radiation_inertance;
+    reflection_numerator_constant = -state->characteristic_impedance * radiation_resistance;
+    reflection_denominator_slope =
+        (radiation_resistance + state->characteristic_impedance) * radiation_inertance;
+    reflection_denominator_constant = state->characteristic_impedance * radiation_resistance;
+
+    denominator_0 = reflection_denominator_slope * bilinear_scale + reflection_denominator_constant;
+    denominator_1 = -reflection_denominator_slope * bilinear_scale + reflection_denominator_constant;
+
+    *filter_a1 = (f32) (denominator_1 / denominator_0);
+    *filter_b0 =
+        (f32) ((reflection_numerator_slope * bilinear_scale + reflection_numerator_constant) / denominator_0);
+    *filter_b1 =
+        (f32) ((-reflection_numerator_slope * bilinear_scale + reflection_numerator_constant) / denominator_0);
 }
 
 static void UpdateVelocityField (Fdtd1DState *state)
@@ -277,7 +413,9 @@ static void UpdateVelocityField (Fdtd1DState *state)
             if (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
                 incoming_pressure = FilterOpenBoundaryReflection(
-                    state,
+                    state->left_open_reflection_filter_a1,
+                    state->left_open_reflection_filter_b0,
+                    state->left_open_reflection_filter_b1,
                     outgoing_pressure,
                     &state->left_previous_outgoing_pressure,
                     &state->left_previous_incoming_pressure
@@ -313,7 +451,9 @@ static void UpdateVelocityField (Fdtd1DState *state)
             if (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
                 incoming_pressure = FilterOpenBoundaryReflection(
-                    state,
+                    state->right_open_reflection_filter_a1,
+                    state->right_open_reflection_filter_b0,
+                    state->right_open_reflection_filter_b1,
                     outgoing_pressure,
                     &state->right_previous_outgoing_pressure,
                     &state->right_previous_incoming_pressure
@@ -341,7 +481,8 @@ static void UpdatePressureField (Fdtd1DState *state)
     for (pressure_index = 0; pressure_index < state->pressure_cell_count; pressure_index += 1)
     {
         state->pressure[pressure_index] -= state->pressure_update_coeff[pressure_index] *
-            (state->velocity[pressure_index + 1] - state->velocity[pressure_index]);
+            ((state->area_velocity[pressure_index + 1] * state->velocity[pressure_index + 1]) -
+             (state->area_velocity[pressure_index] * state->velocity[pressure_index]));
         state->pressure[pressure_index] *= (1.0f - state->pressure_loss[pressure_index]);
     }
 }
@@ -595,6 +736,11 @@ bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc)
         return false;
     }
 
+    if (ValidateAreaSegmentDescs(desc) == false)
+    {
+        return false;
+    }
+
     expected_tube_length_m = (f64) desc->pressure_cell_count * desc->dx;
     if (AbsF64(expected_tube_length_m - desc->tube_length_m) > desc->dx)
     {
@@ -623,19 +769,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     SimulationConfig config;
     SimulationInterface simulation_interface;
     Fdtd1DState *state;
-    f64 bilinear_scale;
-    f64 denominator_0;
-    f64 denominator_1;
     f64 dt;
-    f64 end_correction_m;
-    f64 pipe_radius_m;
-    f64 pressure_update_coeff;
-    f64 radiation_inertance;
-    f64 radiation_resistance;
-    f64 reflection_denominator_constant;
-    f64 reflection_denominator_slope;
-    f64 reflection_numerator_constant;
-    f64 reflection_numerator_slope;
     f64 velocity_update_coeff;
     u32 probe_index;
     u32 source_index;
@@ -730,15 +864,11 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
 
     dt = state->dt;
     velocity_update_coeff = dt / (desc->density_kg_per_m3 * desc->dx);
-    pressure_update_coeff =
-        (desc->density_kg_per_m3 * desc->wave_speed_m_per_s * desc->wave_speed_m_per_s * dt) / desc->dx;
-
-    InitializeUniformField(state->area_pressure, desc->pressure_cell_count, (f32) desc->uniform_area_m2);
-    InitializeUniformField(state->area_velocity, desc->velocity_cell_count, (f32) desc->uniform_area_m2);
+    InitializeAreaFields(state, desc);
     InitializeUniformField(state->pressure_loss, desc->pressure_cell_count, (f32) desc->uniform_loss);
     InitializeUniformField(state->velocity_loss, desc->velocity_cell_count, (f32) desc->uniform_loss);
-    InitializeUniformField(state->pressure_update_coeff, desc->pressure_cell_count, (f32) pressure_update_coeff);
     InitializeUniformField(state->velocity_update_coeff, desc->velocity_cell_count, (f32) velocity_update_coeff);
+    InitializePressureUpdateCoefficients(state);
 
     for (probe_index = 0; probe_index < desc->probe_count; probe_index += 1)
     {
@@ -769,36 +899,28 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     state->left_reflection_coefficient = GetBoundaryReflectionCoefficient(&desc->left_boundary);
     state->right_reflection_coefficient = GetBoundaryReflectionCoefficient(&desc->right_boundary);
 
-    pipe_radius_m = sqrt(desc->uniform_area_m2 / FDTD_1D_PI);
-    end_correction_m = OPEN_END_CORRECTION_COEFFICIENT * pipe_radius_m;
-    radiation_inertance = desc->density_kg_per_m3 * end_correction_m;
-    radiation_resistance = OPEN_END_RADIATION_RESISTANCE_SCALE * state->characteristic_impedance;
-    bilinear_scale = 2.0 / state->dt;
-
-    reflection_numerator_slope =
-        (radiation_resistance - state->characteristic_impedance) * radiation_inertance;
-    reflection_numerator_constant = -state->characteristic_impedance * radiation_resistance;
-    reflection_denominator_slope =
-        (radiation_resistance + state->characteristic_impedance) * radiation_inertance;
-    reflection_denominator_constant = state->characteristic_impedance * radiation_resistance;
-
-    denominator_0 = reflection_denominator_slope * bilinear_scale + reflection_denominator_constant;
-    denominator_1 = -reflection_denominator_slope * bilinear_scale + reflection_denominator_constant;
-
-    state->open_reflection_filter_a1 = (f32) (denominator_1 / denominator_0);
-    state->open_reflection_filter_b0 =
-        (f32) ((reflection_numerator_slope * bilinear_scale + reflection_numerator_constant) / denominator_0);
-    state->open_reflection_filter_b1 =
-        (f32) ((-reflection_numerator_slope * bilinear_scale + reflection_numerator_constant) / denominator_0);
-
     if (desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)
     {
         state->left_reflection_coefficient = -1.0f;
+        InitializeOpenBoundaryFilter(
+            state,
+            state->area_velocity[0],
+            &state->left_open_reflection_filter_a1,
+            &state->left_open_reflection_filter_b0,
+            &state->left_open_reflection_filter_b1
+        );
     }
 
     if (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)
     {
         state->right_reflection_coefficient = -1.0f;
+        InitializeOpenBoundaryFilter(
+            state,
+            state->area_velocity[state->velocity_cell_count - 1],
+            &state->right_open_reflection_filter_a1,
+            &state->right_open_reflection_filter_b0,
+            &state->right_open_reflection_filter_b1
+        );
     }
 
     solver->desc = *desc;

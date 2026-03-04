@@ -98,6 +98,7 @@ int App_Run (void)
     AppState *app;
     AudioDeviceDesc audio_desc;
     AudioEngineDesc engine_desc;
+    Fdtd1DAreaSegmentDesc area_segment_descs[1];
     Fdtd1DProbeDesc probe_descs[2];
     Fdtd1DRenderSourceDesc fdtd_render_source_desc;
     Fdtd1DSourceDesc source_descs[1];
@@ -144,17 +145,21 @@ int App_Run (void)
     }
 
     probe_descs[0].type = FDTD_1D_PROBE_TYPE_PRESSURE;
-    probe_descs[0].cell_index = 96;
+    probe_descs[0].cell_index = 72;
     probe_descs[0].output_channel_index = 0;
     probe_descs[0].is_enabled = true;
 
     probe_descs[1].type = FDTD_1D_PROBE_TYPE_PRESSURE;
-    probe_descs[1].cell_index = 112;
+    probe_descs[1].cell_index = 104;
     probe_descs[1].output_channel_index = 1;
     probe_descs[1].is_enabled = true;
 
-    source_descs[0].cell_index = 16;
+    source_descs[0].cell_index = 24;
     source_descs[0].is_enabled = true;
+
+    area_segment_descs[0].start_cell_index = 0;
+    area_segment_descs[0].end_cell_index = 20;
+    area_segment_descs[0].area_m2 = 0.006;
 
     fdtd_render_source_desc.solver_desc.sample_rate = engine_desc.sample_rate;
     fdtd_render_source_desc.solver_desc.block_frame_count = engine_desc.block_frame_count;
@@ -168,8 +173,10 @@ int App_Run (void)
     fdtd_render_source_desc.solver_desc.courant_number = TEST_COURANT_NUMBER;
     fdtd_render_source_desc.solver_desc.uniform_area_m2 = 0.01;
     fdtd_render_source_desc.solver_desc.uniform_loss = 0.00005;
-    fdtd_render_source_desc.solver_desc.left_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
-    fdtd_render_source_desc.solver_desc.left_boundary.reflection_coefficient = 1.0;
+    fdtd_render_source_desc.solver_desc.area_segment_count = ARRAY_COUNT(area_segment_descs);
+    fdtd_render_source_desc.solver_desc.area_segment_descs = area_segment_descs;
+    fdtd_render_source_desc.solver_desc.left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+    fdtd_render_source_desc.solver_desc.left_boundary.reflection_coefficient = -1.0;
     fdtd_render_source_desc.solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
     fdtd_render_source_desc.solver_desc.right_boundary.reflection_coefficient = 1.0;
     fdtd_render_source_desc.solver_desc.probe_count = ARRAY_COUNT(probe_descs);

@@ -68,6 +68,7 @@ typedef enum VerificationPreset
     VERIFICATION_PRESET_RIGID_RIGID = 0,
     VERIFICATION_PRESET_OPEN_OPEN,
     VERIFICATION_PRESET_OPEN_RIGID,
+    VERIFICATION_PRESET_STAGE2_STOPPED,
 } VerificationPreset;
 
 typedef struct VerificationSettings
@@ -114,6 +115,7 @@ static const char *GetPresetName (VerificationPreset preset)
         case VERIFICATION_PRESET_RIGID_RIGID: return "rigid-rigid";
         case VERIFICATION_PRESET_OPEN_OPEN: return "open-open";
         case VERIFICATION_PRESET_OPEN_RIGID: return "open-rigid";
+        case VERIFICATION_PRESET_STAGE2_STOPPED: return "stage2-stopped";
     }
 
     ASSERT(false);
@@ -143,6 +145,12 @@ static bool TryParsePresetName (const char *text, VerificationPreset *preset)
         return true;
     }
 
+    if ((_stricmp(text, "stage2-stopped") == 0) || (_stricmp(text, "stepped-stopped") == 0))
+    {
+        *preset = VERIFICATION_PRESET_STAGE2_STOPPED;
+        return true;
+    }
+
     return false;
 }
 
@@ -161,6 +169,7 @@ static const char *GetExcitationTypeName (VerificationExcitationType excitation_
 static void ConfigureSolver (
     const VerificationSettings *settings,
     Fdtd1DDesc *desc,
+    Fdtd1DAreaSegmentDesc *area_segment_descs,
     Fdtd1DProbeDesc *probe_descs,
     Fdtd1DSourceDesc *source_descs
 )
@@ -169,6 +178,7 @@ static void ConfigureSolver (
 
     ASSERT(settings != NULL);
     ASSERT(desc != NULL);
+    ASSERT(area_segment_descs != NULL);
     ASSERT(probe_descs != NULL);
     ASSERT(source_descs != NULL);
 
@@ -197,6 +207,8 @@ static void ConfigureSolver (
     desc->courant_number = TEST_COURANT_NUMBER;
     desc->uniform_area_m2 = 0.01;
     desc->uniform_loss = 0.00005;
+    desc->area_segment_count = 0;
+    desc->area_segment_descs = NULL;
     switch (settings->preset)
     {
         case VERIFICATION_PRESET_RIGID_RIGID:
@@ -221,6 +233,20 @@ static void ConfigureSolver (
             desc->left_boundary.reflection_coefficient = -1.0;
             desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
             desc->right_boundary.reflection_coefficient = 1.0;
+        } break;
+
+        case VERIFICATION_PRESET_STAGE2_STOPPED:
+        {
+            area_segment_descs[0].start_cell_index = 0;
+            area_segment_descs[0].end_cell_index = 20;
+            area_segment_descs[0].area_m2 = 0.006;
+
+            desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            desc->left_boundary.reflection_coefficient = -1.0;
+            desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
+            desc->right_boundary.reflection_coefficient = 1.0;
+            desc->area_segment_count = 1;
+            desc->area_segment_descs = area_segment_descs;
         } break;
     }
 
@@ -750,6 +776,7 @@ int main (int argc, char **argv)
     MemoryArena arena;
     Fdtd1D solver;
     Fdtd1DDesc solver_desc;
+    Fdtd1DAreaSegmentDesc area_segment_descs[1];
     Fdtd1DProbeDesc probe_descs[2];
     Fdtd1DSourceDesc source_descs[1];
     Simulation *simulation;
@@ -792,7 +819,7 @@ int main (int argc, char **argv)
         return 1;
     }
 
-    ConfigureSolver(&settings, &solver_desc, probe_descs, source_descs);
+    ConfigureSolver(&settings, &solver_desc, area_segment_descs, probe_descs, source_descs);
 
     if (Fdtd1D_Initialize(&solver, &arena, &solver_desc) == false)
     {

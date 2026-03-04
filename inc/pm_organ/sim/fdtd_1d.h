@@ -38,6 +38,13 @@ typedef struct Fdtd1DSourceDesc
     bool is_enabled;
 } Fdtd1DSourceDesc;
 
+typedef struct Fdtd1DAreaSegmentDesc
+{
+    u32 start_cell_index;
+    u32 end_cell_index;
+    f64 area_m2;
+} Fdtd1DAreaSegmentDesc;
+
 typedef struct Fdtd1DDesc
 {
     u32 sample_rate;
@@ -55,6 +62,9 @@ typedef struct Fdtd1DDesc
 
     f64 uniform_area_m2;
     f64 uniform_loss;
+
+    u32 area_segment_count;
+    const Fdtd1DAreaSegmentDesc *area_segment_descs;
 
     Fdtd1DBoundaryDesc left_boundary;
     Fdtd1DBoundaryDesc right_boundary;
@@ -102,9 +112,12 @@ typedef struct Fdtd1DState
     Fdtd1DBoundaryType right_boundary_type;
     f32 left_reflection_coefficient;
     f32 right_reflection_coefficient;
-    f32 open_reflection_filter_a1;
-    f32 open_reflection_filter_b0;
-    f32 open_reflection_filter_b1;
+    f32 left_open_reflection_filter_a1;
+    f32 left_open_reflection_filter_b0;
+    f32 left_open_reflection_filter_b1;
+    f32 right_open_reflection_filter_a1;
+    f32 right_open_reflection_filter_b0;
+    f32 right_open_reflection_filter_b1;
     f32 left_previous_outgoing_pressure;
     f32 left_previous_incoming_pressure;
     f32 right_previous_outgoing_pressure;
