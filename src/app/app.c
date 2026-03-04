@@ -1,24 +1,21 @@
-#include <math.h>
-
 #include "pm_organ/app/app.h"
 #include "pm_organ/audio/audio_device.h"
+#include "pm_organ/audio/audio_engine.h"
 #include "pm_organ/core/assert.h"
 #include "pm_organ/core/frame_timer.h"
 #include "pm_organ/core/memory_arena.h"
 #include "pm_organ/platform/time.h"
 #include "pm_organ/platform/window.h"
 
-static const f64 PI64 = 3.14159265358979323846;
-
 typedef struct AppState
 {
     AudioDevice audio_device;
+    AudioEngine audio_engine;
     FrameTimer frame_timer;
     Window main_window;
-    f64 sine_phase;
 } AppState;
 
-static void RenderSineWave (
+static void RenderEngineBlock (
     void *user_data,
     f32 *output,
     u32 block_frame_count,
@@ -27,7 +24,6 @@ static void RenderSineWave (
 )
 {
     AppState *app;
-    u32 frame_index;
 
     ASSERT(user_data != NULL);
     ASSERT(output != NULL);
@@ -35,31 +31,18 @@ static void RenderSineWave (
     ASSERT(sample_rate > 0);
 
     app = (AppState *) user_data;
+    ASSERT(app->audio_engine.config.block_frame_count == block_frame_count);
+    ASSERT(app->audio_engine.config.channel_count == channel_count);
+    ASSERT(app->audio_engine.config.sample_rate == sample_rate);
 
-    for (frame_index = 0; frame_index < block_frame_count; frame_index += 1)
-    {
-        f32 sample_value;
-        u32 channel_index;
-
-        sample_value = (f32) (0.05 * sin(app->sine_phase));
-        app->sine_phase += (2.0 * PI64 * 220.0) / (f64) sample_rate;
-
-        if (app->sine_phase >= 2.0 * PI64)
-        {
-            app->sine_phase -= 2.0 * PI64;
-        }
-
-        for (channel_index = 0; channel_index < channel_count; channel_index += 1)
-        {
-            output[frame_index * channel_count + channel_index] = sample_value;
-        }
-    }
+    AudioEngine_RenderBlock(&app->audio_engine, output);
 }
 
 int App_Run (void)
 {
     AppState *app;
     AudioDeviceDesc audio_desc;
+    AudioEngineDesc engine_desc;
     MemoryArena bootstrap_arena;
     WindowDesc window_desc;
 
@@ -79,7 +62,6 @@ int App_Run (void)
 
     FrameTimer_Initialize(&app->frame_timer);
     FrameTimer_SetTargetHz(&app->frame_timer, 60.0);
-    app->sine_phase = 0.0;
 
     window_desc.title = "PM-Organ";
     window_desc.client_width = 1280;
@@ -91,11 +73,22 @@ int App_Run (void)
         return 1;
     }
 
+    engine_desc.sample_rate = 48000;
+    engine_desc.channel_count = 2;
+    engine_desc.block_frame_count = 64;
+
+    if (AudioEngine_Initialize(&app->audio_engine, &bootstrap_arena, &engine_desc) == false)
+    {
+        PlatformWindow_Destroy(&app->main_window);
+        MemoryArena_Destroy(&bootstrap_arena);
+        return 1;
+    }
+
     audio_desc.sample_rate = 48000;
     audio_desc.channel_count = 2;
     audio_desc.frames_per_buffer = 256;
-    audio_desc.block_frame_count = 64;
-    audio_desc.render_callback = RenderSineWave;
+    audio_desc.block_frame_count = app->audio_engine.config.block_frame_count;
+    audio_desc.render_callback = RenderEngineBlock;
     audio_desc.user_data = app;
 
     if (AudioDevice_Open(&app->audio_device, &bootstrap_arena, &audio_desc) == false)
@@ -121,6 +114,7 @@ int App_Run (void)
     }
 
     AudioDevice_Close(&app->audio_device);
+    AudioEngine_Shutdown(&app->audio_engine);
     PlatformWindow_Destroy(&app->main_window);
     MemoryArena_Destroy(&bootstrap_arena);
 
