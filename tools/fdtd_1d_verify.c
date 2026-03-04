@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,6 +6,8 @@
 #include "pm_organ/core/assert.h"
 #include "pm_organ/core/memory_arena.h"
 #include "pm_organ/sim/fdtd_1d.h"
+
+#define MODE_COUNT 5
 
 typedef struct VerificationResult
 {
@@ -46,6 +49,13 @@ typedef struct ArrivalSummary
     VerificationResult first_crossing;
     WindowPeakResult main_lobe_peak;
 } ArrivalSummary;
+
+typedef struct ModeResult
+{
+    f64 expected_frequency_hz;
+    f64 measured_peak_frequency_hz;
+    f64 measured_peak_magnitude;
+} ModeResult;
 
 typedef enum VerificationPreset
 {
@@ -369,6 +379,145 @@ static WindowEnergyResult AnalyzeWindowEnergy (
     return result;
 }
 
+static f64 ComputeSpectrumMagnitude (
+    const SimulationOfflineCapture *capture,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 sample_rate,
+    f64 frequency_hz
+)
+{
+    f64 real_sum;
+    f64 imaginary_sum;
+    u32 frame_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(capture->samples != NULL);
+    ASSERT(analysis_channel_index < capture->channel_count);
+    ASSERT(sample_rate > 0.0);
+    ASSERT(start_frame <= end_frame);
+
+    real_sum = 0.0;
+    imaginary_sum = 0.0;
+
+    if (capture->frame_count == 0)
+    {
+        return 0.0;
+    }
+
+    if (end_frame >= capture->frame_count)
+    {
+        end_frame = capture->frame_count - 1;
+    }
+
+    for (frame_index = start_frame; frame_index <= end_frame; frame_index += 1)
+    {
+        f64 sample;
+        f64 phase;
+
+        sample = (f64) capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        phase = 2.0 * 3.14159265358979323846 * frequency_hz * ((f64) frame_index / sample_rate);
+
+        real_sum += sample * cos(phase);
+        imaginary_sum -= sample * sin(phase);
+    }
+
+    return sqrt(real_sum * real_sum + imaginary_sum * imaginary_sum);
+}
+
+static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc)
+{
+    ASSERT(desc != NULL);
+    ASSERT(desc->tube_length_m > 0.0);
+
+    if ((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN) &&
+        (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID))
+    {
+        return desc->wave_speed_m_per_s / (4.0 * desc->tube_length_m);
+    }
+
+    if ((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID) &&
+        (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN))
+    {
+        return desc->wave_speed_m_per_s / (4.0 * desc->tube_length_m);
+    }
+
+    return desc->wave_speed_m_per_s / (2.0 * desc->tube_length_m);
+}
+
+static void AnalyzeModeSeries (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 mode_count,
+    ModeResult *results
+)
+{
+    f64 fundamental_frequency_hz;
+    u32 mode_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(desc != NULL);
+    ASSERT(results != NULL);
+
+    fundamental_frequency_hz = GetFundamentalFrequencyHz(desc);
+
+    for (mode_index = 0; mode_index < mode_count; mode_index += 1)
+    {
+        f64 expected_frequency_hz;
+        f64 search_start_frequency_hz;
+        f64 search_end_frequency_hz;
+        f64 best_frequency_hz;
+        f64 best_magnitude;
+        f64 search_frequency_hz;
+
+        if (((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN) &&
+             (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID)) ||
+            ((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID) &&
+             (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)))
+        {
+            expected_frequency_hz = fundamental_frequency_hz * (f64) (2 * (i32) mode_index + 1);
+        }
+        else
+        {
+            expected_frequency_hz = fundamental_frequency_hz * (f64) (mode_index + 1);
+        }
+
+        search_start_frequency_hz = expected_frequency_hz * 0.90;
+        search_end_frequency_hz = expected_frequency_hz * 1.10;
+        best_frequency_hz = expected_frequency_hz;
+        best_magnitude = 0.0;
+
+        for (search_frequency_hz = search_start_frequency_hz;
+             search_frequency_hz <= search_end_frequency_hz;
+             search_frequency_hz += 1.0)
+        {
+            f64 magnitude;
+
+            magnitude = ComputeSpectrumMagnitude(
+                capture,
+                analysis_channel_index,
+                start_frame,
+                capture->frame_count - 1,
+                (f64) desc->sample_rate,
+                search_frequency_hz
+            );
+
+            if (magnitude > best_magnitude)
+            {
+                best_magnitude = magnitude;
+                best_frequency_hz = search_frequency_hz;
+            }
+        }
+
+        results[mode_index].expected_frequency_hz = expected_frequency_hz;
+        results[mode_index].measured_peak_frequency_hz = best_frequency_hz;
+        results[mode_index].measured_peak_magnitude = best_magnitude;
+    }
+}
+
 static f64 ComputeStateEnergy (const Fdtd1DState *state)
 {
     f64 energy;
@@ -421,6 +570,7 @@ int main (int argc, char **argv)
     WindowPeakResult right_reflection_window;
     WindowEnergyResult left_reflection_energy;
     WindowEnergyResult right_reflection_energy;
+    ModeResult mode_results[MODE_COUNT];
     const SimulationStats *stats;
     const Fdtd1DState *state;
     usize capture_sample_count;
@@ -609,6 +759,14 @@ int main (int argc, char **argv)
         (u32) expected_right_reflection_frames - WINDOW_RADIUS,
         (u32) expected_right_reflection_frames + WINDOW_RADIUS
     );
+    AnalyzeModeSeries(
+        &capture,
+        &solver_desc,
+        0,
+        solver_desc.block_frame_count,
+        MODE_COUNT,
+        mode_results
+    );
 
     printf("FDTD 1D Verification\n");
     printf("\n");
@@ -761,6 +919,22 @@ int main (int argc, char **argv)
     printf("  drift:                  %.9f\n",
         energy.final_energy - energy.initial_energy
     );
+    printf("\n");
+
+    printf("Modal Analysis\n");
+    printf("  analysis_channel:       0\n");
+    printf("  analysis_start_frame:   %u\n",
+        solver_desc.block_frame_count
+    );
+    for (block_index = 0; block_index < MODE_COUNT; block_index += 1)
+    {
+        printf("  mode %u:                 expected %.2f Hz, peak %.2f Hz, magnitude %.6f\n",
+            block_index + 1,
+            mode_results[block_index].expected_frequency_hz,
+            mode_results[block_index].measured_peak_frequency_hz,
+            mode_results[block_index].measured_peak_magnitude
+        );
+    }
     printf("\n");
 
     if (csv_output_path != NULL)
