@@ -24,6 +24,14 @@ typedef struct WindowPeakResult
     f32 peak_abs_value;
 } WindowPeakResult;
 
+typedef struct WindowEnergyResult
+{
+    u32 start_frame;
+    u32 end_frame;
+    f64 energy_sum;
+    f64 energy_centroid_frame;
+} WindowEnergyResult;
+
 typedef struct EnergyResult
 {
     f64 initial_energy;
@@ -225,6 +233,59 @@ static WindowPeakResult AnalyzeWindowPeak (
     return result;
 }
 
+static WindowEnergyResult AnalyzeWindowEnergy (
+    const SimulationOfflineCapture *capture,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame
+)
+{
+    WindowEnergyResult result;
+    f64 weighted_sum;
+    u32 frame_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(capture->samples != NULL);
+    ASSERT(analysis_channel_index < capture->channel_count);
+    ASSERT(start_frame <= end_frame);
+
+    result.start_frame = start_frame;
+    result.end_frame = end_frame;
+    result.energy_sum = 0.0;
+    result.energy_centroid_frame = (f64) start_frame;
+
+    if (capture->frame_count == 0)
+    {
+        return result;
+    }
+
+    if (result.end_frame >= capture->frame_count)
+    {
+        result.end_frame = capture->frame_count - 1;
+    }
+
+    weighted_sum = 0.0;
+
+    for (frame_index = result.start_frame; frame_index <= result.end_frame; frame_index += 1)
+    {
+        f64 sample;
+        f64 sample_energy;
+
+        sample = (f64) capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        sample_energy = sample * sample;
+
+        result.energy_sum += sample_energy;
+        weighted_sum += (f64) frame_index * sample_energy;
+    }
+
+    if (result.energy_sum > 0.0)
+    {
+        result.energy_centroid_frame = weighted_sum / result.energy_sum;
+    }
+
+    return result;
+}
+
 static f64 ComputeStateEnergy (const Fdtd1DState *state)
 {
     f64 energy;
@@ -274,6 +335,8 @@ int main (int argc, char **argv)
     ArrivalSummary right_arrival;
     WindowPeakResult left_reflection_window;
     WindowPeakResult right_reflection_window;
+    WindowEnergyResult left_reflection_energy;
+    WindowEnergyResult right_reflection_energy;
     const SimulationStats *stats;
     const Fdtd1DState *state;
     usize capture_sample_count;
@@ -435,6 +498,18 @@ int main (int argc, char **argv)
         (u32) expected_right_reflection_frames - WINDOW_RADIUS,
         (u32) expected_right_reflection_frames + WINDOW_RADIUS
     );
+    left_reflection_energy = AnalyzeWindowEnergy(
+        &capture,
+        0,
+        (u32) expected_left_reflection_frames - WINDOW_RADIUS,
+        (u32) expected_left_reflection_frames + WINDOW_RADIUS
+    );
+    right_reflection_energy = AnalyzeWindowEnergy(
+        &capture,
+        1,
+        (u32) expected_right_reflection_frames - WINDOW_RADIUS,
+        (u32) expected_right_reflection_frames + WINDOW_RADIUS
+    );
 
     printf("FDTD 1D Verification\n");
     printf("\n");
@@ -516,6 +591,10 @@ int main (int argc, char **argv)
         left_reflection_window.peak_value,
         left_reflection_window.peak_abs_value
     );
+    printf("  left energy centroid:   %.3f (window energy %.9f)\n",
+        left_reflection_energy.energy_centroid_frame,
+        left_reflection_energy.energy_sum
+    );
     printf("  right expected frame:   %.2f\n",
         expected_right_reflection_frames
     );
@@ -527,6 +606,10 @@ int main (int argc, char **argv)
         right_reflection_window.peak_frame,
         right_reflection_window.peak_value,
         right_reflection_window.peak_abs_value
+    );
+    printf("  right energy centroid:  %.3f (window energy %.9f)\n",
+        right_reflection_energy.energy_centroid_frame,
+        right_reflection_energy.energy_sum
     );
     printf("\n");
 
