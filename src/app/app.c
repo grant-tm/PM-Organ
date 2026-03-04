@@ -10,6 +10,7 @@
 #include "pm_organ/core/assert.h"
 #include "pm_organ/core/frame_timer.h"
 #include "pm_organ/core/memory_arena.h"
+#include "pm_organ/debug/debug_gui.h"
 #include "pm_organ/platform/time.h"
 #include "pm_organ/sim/fdtd_1d_render_source.h"
 #include "pm_organ/platform/window.h"
@@ -27,6 +28,7 @@ typedef struct AppState
 {
     AudioDevice audio_device;
     AudioEngine audio_engine;
+    DebugGui debug_gui;
     Fdtd1DRenderSource fdtd_render_sources[FDTD_PRESET_TYPE_COUNT];
     FrameTimer frame_timer;
     Window main_window;
@@ -55,16 +57,8 @@ static const char *GetFdtdPresetName (FdtdPresetType preset_type)
 
 static void UpdateWindowTitle (AppState *app)
 {
-    char title[128];
-    const char *source_name;
-    const char *preset_name;
-
     ASSERT(app != NULL);
-
-    source_name = app->fdtd_source_is_active ? "FDTD" : "Test Tone";
-    preset_name = GetFdtdPresetName(app->active_fdtd_preset);
-    _snprintf_s(title, ARRAY_COUNT(title), _TRUNCATE, "PM-Organ | %s | %s", source_name, preset_name);
-    PlatformWindow_SetTitle(&app->main_window, title);
+    PlatformWindow_SetTitle(&app->main_window, "PM-Organ");
 }
 
 static void BuildFdtdPresetDesc (
@@ -213,6 +207,25 @@ static void CycleFdtdPreset (AppState *app)
     UpdateWindowTitle(app);
 }
 
+static void SelectFdtdPreset (AppState *app, FdtdPresetType preset_type)
+{
+    ASSERT(app != NULL);
+    ASSERT(preset_type < FDTD_PRESET_TYPE_COUNT);
+
+    app->active_fdtd_preset = preset_type;
+    if (app->fdtd_source_is_active)
+    {
+        AudioEngine_SetRenderSource(
+            &app->audio_engine,
+            Fdtd1DRenderSource_Render,
+            &app->fdtd_render_sources[app->active_fdtd_preset]
+        );
+    }
+
+    Fdtd1DRenderSource_TriggerStartupImpulse(&app->fdtd_render_sources[app->active_fdtd_preset]);
+    UpdateWindowTitle(app);
+}
+
 static void UpdateDebugInput (AppState *app)
 {
     bool cycle_is_down;
@@ -316,6 +329,16 @@ int App_Run (void)
         return 1;
     }
 
+    if (DebugGui_Initialize(&app->debug_gui, &bootstrap_arena, &app->main_window) == false)
+    {
+        AudioEngine_Shutdown(&app->audio_engine);
+        PlatformWindow_Destroy(&app->main_window);
+        MemoryArena_Destroy(&bootstrap_arena);
+        return 1;
+    }
+
+    PlatformWindow_SetMessageCallback(&app->main_window, DebugGui_WindowMessageCallback, &app->debug_gui);
+
     for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
     {
         Fdtd1DAreaSegmentDesc area_segment_descs[2];
@@ -345,6 +368,7 @@ int App_Run (void)
                 Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type - 1]);
             }
 
+            DebugGui_Shutdown(&app->debug_gui);
             AudioEngine_Shutdown(&app->audio_engine);
             PlatformWindow_Destroy(&app->main_window);
             MemoryArena_Destroy(&bootstrap_arena);
@@ -361,6 +385,7 @@ int App_Run (void)
         {
             Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type]);
         }
+        DebugGui_Shutdown(&app->debug_gui);
         AudioEngine_Shutdown(&app->audio_engine);
         PlatformWindow_Destroy(&app->main_window);
         MemoryArena_Destroy(&bootstrap_arena);
@@ -382,6 +407,7 @@ int App_Run (void)
 
     if (AudioDevice_Open(&app->audio_device, &bootstrap_arena, &audio_desc) == false)
     {
+        DebugGui_Shutdown(&app->debug_gui);
         PlatformWindow_Destroy(&app->main_window);
         MemoryArena_Destroy(&bootstrap_arena);
         return 1;
@@ -390,6 +416,7 @@ int App_Run (void)
     if (AudioDevice_Start(&app->audio_device) == false)
     {
         AudioDevice_Close(&app->audio_device);
+        DebugGui_Shutdown(&app->debug_gui);
         PlatformWindow_Destroy(&app->main_window);
         MemoryArena_Destroy(&bootstrap_arena);
         return 1;
@@ -397,13 +424,54 @@ int App_Run (void)
 
     while (app->main_window.is_running)
     {
+        DebugGuiFrameActions gui_actions;
+        DebugGuiFrameDesc gui_frame_desc;
+        const char *preset_names[FDTD_PRESET_TYPE_COUNT];
+
         FrameTimer_BeginFrame(&app->frame_timer);
         PlatformWindow_PumpMessages(&app->main_window);
         UpdateDebugInput(app);
+
+        for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+        {
+            preset_names[preset_type] = GetFdtdPresetName(preset_type);
+        }
+
+        gui_frame_desc.fdtd_source_is_active = app->fdtd_source_is_active;
+        gui_frame_desc.active_preset_index = app->active_fdtd_preset;
+        gui_frame_desc.preset_count = FDTD_PRESET_TYPE_COUNT;
+        gui_frame_desc.preset_names = preset_names;
+        gui_frame_desc.delta_seconds = app->frame_timer.delta_seconds;
+
+        DebugGui_BeginFrame(&app->debug_gui);
+        DebugGui_Draw(&app->debug_gui, &gui_frame_desc, &gui_actions);
+
+        if (gui_actions.request_use_fdtd_source)
+        {
+            SetActiveRenderSource(app, true);
+        }
+
+        if (gui_actions.request_use_test_tone)
+        {
+            SetActiveRenderSource(app, false);
+        }
+
+        if (gui_actions.request_select_preset)
+        {
+            SelectFdtdPreset(app, (FdtdPresetType) gui_actions.selected_preset_index);
+        }
+
+        if (gui_actions.request_trigger_impulse)
+        {
+            Fdtd1DRenderSource_TriggerStartupImpulse(&app->fdtd_render_sources[app->active_fdtd_preset]);
+        }
+
+        DebugGui_Render(&app->debug_gui);
         FrameTimer_EndFrame(&app->frame_timer);
     }
 
     AudioDevice_Close(&app->audio_device);
+    DebugGui_Shutdown(&app->debug_gui);
     for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
     {
         Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type]);

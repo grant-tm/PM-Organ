@@ -7,6 +7,7 @@ static const char WINDOW_CLASS_NAME[] = "PMOrganWindowClass";
 
 static LRESULT CALLBACK WindowProc (HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param)
 {
+    usize callback_result;
     Window *window;
 
     window = (Window *) GetWindowLongPtrA(hwnd, GWLP_USERDATA);
@@ -21,6 +22,24 @@ static LRESULT CALLBACK WindowProc (HWND hwnd, UINT message, WPARAM w_param, LPA
             SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR) create_struct->lpCreateParams);
             return DefWindowProcA(hwnd, message, w_param, l_param);
         }
+
+        default:
+        {
+            if ((window != NULL) && (window->message_callback != NULL))
+            {
+                if (window->message_callback(
+                    window->message_callback_user_data,
+                    hwnd,
+                    message,
+                    (usize) w_param,
+                    (usize) l_param,
+                    &callback_result
+                ))
+                {
+                    return (LRESULT) callback_result;
+                }
+            }
+        } break;
 
         case WM_SIZE:
         {
@@ -119,6 +138,8 @@ bool PlatformWindow_Create (Window *window, const WindowDesc *desc)
 
     window->client_width = desc->client_width;
     window->client_height = desc->client_height;
+    window->message_callback = NULL;
+    window->message_callback_user_data = NULL;
     window->is_running = true;
     window->native_handle = NULL;
 
@@ -183,6 +204,18 @@ void PlatformWindow_PumpMessages (Window *window)
         TranslateMessage(&message);
         DispatchMessageA(&message);
     }
+}
+
+void PlatformWindow_SetMessageCallback (
+    Window *window,
+    WindowMessageCallback *message_callback,
+    void *user_data
+)
+{
+    ASSERT(window != NULL);
+
+    window->message_callback = message_callback;
+    window->message_callback_user_data = user_data;
 }
 
 void PlatformWindow_SetTitle (Window *window, const char *title)
