@@ -91,6 +91,7 @@ typedef struct Fdtd1DState
 
     f32 left_reflection_coefficient;
     f32 right_reflection_coefficient;
+    u32 noise_state;
 } Fdtd1DState;
 
 typedef struct Fdtd1D

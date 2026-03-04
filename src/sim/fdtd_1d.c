@@ -164,13 +164,177 @@ static void ResetStateCallback (Simulation *simulation)
 
     memset(state->pressure, 0, sizeof(f32) * (usize) state->pressure_cell_count);
     memset(state->velocity, 0, sizeof(f32) * (usize) state->velocity_cell_count);
+    state->noise_state = 0x13572468u;
+}
+
+static f32 NextNoiseSample (Fdtd1DState *state)
+{
+    ASSERT(state != NULL);
+
+    state->noise_state = state->noise_state * 1664525u + 1013904223u;
+    return ((f32) ((state->noise_state >> 8) & 0x00FFFFFFu) / 8388607.5f) - 1.0f;
+}
+
+static void UpdateVelocityField (Fdtd1DState *state)
+{
+    u32 velocity_index;
+
+    ASSERT(state != NULL);
+    ASSERT(state->pressure_cell_count > 0);
+    ASSERT(state->velocity_cell_count == (state->pressure_cell_count + 1));
+
+    state->velocity[0] -= state->velocity_update_coeff[0] *
+        (state->pressure[0] - state->left_reflection_coefficient * state->pressure[0]);
+
+    for (velocity_index = 1; velocity_index < (state->velocity_cell_count - 1); velocity_index += 1)
+    {
+        state->velocity[velocity_index] -= state->velocity_update_coeff[velocity_index] *
+            (state->pressure[velocity_index] - state->pressure[velocity_index - 1]);
+    }
+
+    state->velocity[state->velocity_cell_count - 1] -= state->velocity_update_coeff[state->velocity_cell_count - 1] *
+        (state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1] -
+         state->pressure[state->pressure_cell_count - 1]);
+}
+
+static void UpdatePressureField (Fdtd1DState *state)
+{
+    u32 pressure_index;
+
+    ASSERT(state != NULL);
+
+    for (pressure_index = 0; pressure_index < state->pressure_cell_count; pressure_index += 1)
+    {
+        state->pressure[pressure_index] -= state->pressure_update_coeff[pressure_index] *
+            (state->velocity[pressure_index + 1] - state->velocity[pressure_index]);
+    }
+}
+
+static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *process_context, Fdtd1DState *state)
+{
+    u32 excitation_index;
+
+    ASSERT(simulation != NULL);
+    ASSERT(process_context != NULL);
+    ASSERT(state != NULL);
+
+    for (excitation_index = 0; excitation_index < simulation->excitation_count; excitation_index += 1)
+    {
+        SimulationExcitation *excitation;
+        f32 excitation_sample;
+        u32 source_index;
+        u32 cell_index;
+
+        excitation = &process_context->excitations[excitation_index];
+        if (excitation->is_active == false)
+        {
+            continue;
+        }
+
+        if (excitation->target_index >= state->source_count)
+        {
+            excitation->is_active = false;
+            continue;
+        }
+
+        source_index = excitation->target_index;
+        cell_index = state->source_cell_indices[source_index];
+        excitation_sample = 0.0f;
+
+        switch (excitation->type)
+        {
+            case SIMULATION_EXCITATION_TYPE_NONE:
+            {
+            } break;
+
+            case SIMULATION_EXCITATION_TYPE_IMPULSE:
+            {
+                excitation_sample = (f32) excitation->value;
+                excitation->remaining_frame_count = 0;
+            } break;
+
+            case SIMULATION_EXCITATION_TYPE_CONSTANT:
+            {
+                excitation_sample = (f32) excitation->value;
+            } break;
+
+            case SIMULATION_EXCITATION_TYPE_NOISE:
+            {
+                excitation_sample = (f32) excitation->value * NextNoiseSample(state);
+            } break;
+
+            case SIMULATION_EXCITATION_TYPE_CUSTOM:
+            {
+            } break;
+        }
+
+        state->pressure[cell_index] += excitation_sample;
+
+        if (excitation->remaining_frame_count > 0)
+        {
+            excitation->remaining_frame_count -= 1;
+        }
+
+        if ((excitation->type == SIMULATION_EXCITATION_TYPE_IMPULSE) ||
+            ((excitation->remaining_frame_count == 0) &&
+             (excitation->type != SIMULATION_EXCITATION_TYPE_CONSTANT) &&
+             (excitation->type != SIMULATION_EXCITATION_TYPE_CUSTOM)))
+        {
+            excitation->is_active = false;
+        }
+    }
+}
+
+static void ReadProbes (SimulationProcessContext *process_context, const Fdtd1DState *state, u32 frame_index)
+{
+    u32 probe_index;
+
+    ASSERT(process_context != NULL);
+    ASSERT(state != NULL);
+
+    for (probe_index = 0; probe_index < state->probe_count; probe_index += 1)
+    {
+        f32 sample_value;
+        u32 cell_index;
+        u32 output_channel_index;
+
+        if (process_context->probes[probe_index].is_enabled == false)
+        {
+            continue;
+        }
+
+        cell_index = state->probe_cell_indices[probe_index];
+        output_channel_index = state->probe_output_channels[probe_index];
+        sample_value = state->pressure[cell_index];
+
+        if (process_context->probe_buffer != NULL)
+        {
+            process_context->probe_buffer[frame_index * state->probe_count + probe_index] = sample_value;
+        }
+
+        process_context->output_buffer[
+            frame_index * process_context->output_channel_count + output_channel_index
+        ] += sample_value;
+    }
+}
+
+static void CompactExcitations (Simulation *simulation)
+{
+    while (simulation->excitation_count > 0)
+    {
+        if (simulation->excitations[simulation->excitation_count - 1].is_active)
+        {
+            break;
+        }
+
+        simulation->excitation_count -= 1;
+    }
 }
 
 static void ProcessBlockCallback (Simulation *simulation, SimulationProcessContext *process_context)
 {
     Fdtd1DState *state;
     u32 frame_index;
-    u32 probe_index;
 
     ASSERT(simulation != NULL);
     ASSERT(process_context != NULL);
@@ -180,31 +344,13 @@ static void ProcessBlockCallback (Simulation *simulation, SimulationProcessConte
 
     for (frame_index = 0; frame_index < process_context->block_frame_count; frame_index += 1)
     {
-        for (probe_index = 0; probe_index < state->probe_count; probe_index += 1)
-        {
-            f32 sample_value;
-            u32 cell_index;
-            u32 output_channel_index;
-
-            if (process_context->probes[probe_index].is_enabled == false)
-            {
-                continue;
-            }
-
-            cell_index = state->probe_cell_indices[probe_index];
-            output_channel_index = state->probe_output_channels[probe_index];
-            sample_value = state->pressure[cell_index];
-
-            if (process_context->probe_buffer != NULL)
-            {
-                process_context->probe_buffer[frame_index * state->probe_count + probe_index] = sample_value;
-            }
-
-            process_context->output_buffer[
-                frame_index * process_context->output_channel_count + output_channel_index
-            ] += sample_value;
-        }
+        UpdateVelocityField(state);
+        UpdatePressureField(state);
+        ApplyExcitations(simulation, process_context, state);
+        ReadProbes(process_context, state, frame_index);
     }
+
+    CompactExcitations(simulation);
 }
 
 bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc)
@@ -337,7 +483,6 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     BuildSimulationConfig(desc, &config);
 
     memset(&simulation_interface, 0, sizeof(simulation_interface));
-    simulation_interface.reset_state = ResetStateCallback;
     simulation_interface.process_block = ProcessBlockCallback;
 
     if (Simulation_Initialize(&solver->simulation, arena, &config, &simulation_interface) == false)
@@ -450,6 +595,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     solver->desc.courant_number = state->courant_number;
     solver->state = state;
     solver->simulation.model_state = state;
+    solver->simulation.interface.reset_state = ResetStateCallback;
 
     Simulation_Reset(&solver->simulation);
 
