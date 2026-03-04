@@ -65,6 +65,9 @@ typedef struct AppState
     AppOutputExtractionMode active_output_extraction_mode;
     f32 drive_amplitude;
     f32 windchest_pressure;
+    f32 speech_attack_seconds;
+    f32 speech_chiff_amount;
+    f32 speech_chiff_decay_seconds;
     f32 master_gain;
     bool output_is_muted;
     bool fdtd_source_is_active;
@@ -262,6 +265,9 @@ static void BuildFdtdPresetDesc (
     render_source_desc->source_coupling_mode = FDTD_1D_SOURCE_COUPLING_MODE_PRESSURE;
     render_source_desc->drive_amplitude = 0.0;
     render_source_desc->windchest_pressure = 1.0;
+    render_source_desc->speech_attack_seconds = 0.06;
+    render_source_desc->speech_chiff_amount = 0.35;
+    render_source_desc->speech_chiff_decay_seconds = 0.05;
     render_source_desc->output_extraction_mode = FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     render_source_desc->startup_impulse_is_enabled = true;
     render_source_desc->startup_impulse_target_index = 0;
@@ -374,6 +380,30 @@ static void ApplyExcitationSettingsToSources (AppState *app)
             &app->fdtd_render_sources[preset_type],
             (f64) app->windchest_pressure
         );
+        Fdtd1DRenderSource_SetSpeechAttackSeconds(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->speech_attack_seconds
+        );
+        Fdtd1DRenderSource_SetSpeechChiffAmount(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->speech_chiff_amount
+        );
+        Fdtd1DRenderSource_SetSpeechChiffDecaySeconds(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->speech_chiff_decay_seconds
+        );
+    }
+}
+
+static void RestartSpeechForAllSources (AppState *app)
+{
+    FdtdPresetType preset_type;
+
+    ASSERT(app != NULL);
+
+    for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+    {
+        Fdtd1DRenderSource_RestartSpeech(&app->fdtd_render_sources[preset_type]);
     }
 }
 
@@ -465,6 +495,49 @@ static void SetWindchestPressure (AppState *app, f32 windchest_pressure)
 
     app->windchest_pressure = windchest_pressure;
     ApplyExcitationSettingsToSources(app);
+    RestartSpeechForAllSources(app);
+}
+
+static void SetSpeechAttackSeconds (AppState *app, f32 speech_attack_seconds)
+{
+    ASSERT(app != NULL);
+
+    if (speech_attack_seconds < 0.0f)
+    {
+        speech_attack_seconds = 0.0f;
+    }
+
+    app->speech_attack_seconds = speech_attack_seconds;
+    ApplyExcitationSettingsToSources(app);
+    RestartSpeechForAllSources(app);
+}
+
+static void SetSpeechChiffAmount (AppState *app, f32 speech_chiff_amount)
+{
+    ASSERT(app != NULL);
+
+    if (speech_chiff_amount < 0.0f)
+    {
+        speech_chiff_amount = 0.0f;
+    }
+
+    app->speech_chiff_amount = speech_chiff_amount;
+    ApplyExcitationSettingsToSources(app);
+    RestartSpeechForAllSources(app);
+}
+
+static void SetSpeechChiffDecaySeconds (AppState *app, f32 speech_chiff_decay_seconds)
+{
+    ASSERT(app != NULL);
+
+    if (speech_chiff_decay_seconds < 0.0f)
+    {
+        speech_chiff_decay_seconds = 0.0f;
+    }
+
+    app->speech_chiff_decay_seconds = speech_chiff_decay_seconds;
+    ApplyExcitationSettingsToSources(app);
+    RestartSpeechForAllSources(app);
 }
 
 static void UpdateDebugInput (AppState *app)
@@ -642,6 +715,9 @@ int App_Run (void)
     app->active_output_extraction_mode = APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     app->drive_amplitude = 0.0f;
     app->windchest_pressure = 1.0f;
+    app->speech_attack_seconds = 0.06f;
+    app->speech_chiff_amount = 0.35f;
+    app->speech_chiff_decay_seconds = 0.05f;
     app->master_gain = 0.35f;
     app->output_is_muted = false;
     AudioEngine_SetMasterGain(&app->audio_engine, app->master_gain);
@@ -709,6 +785,9 @@ int App_Run (void)
         gui_frame_desc.output_is_muted = app->output_is_muted;
         gui_frame_desc.drive_amplitude = app->drive_amplitude;
         gui_frame_desc.windchest_pressure = app->windchest_pressure;
+        gui_frame_desc.speech_attack_seconds = app->speech_attack_seconds;
+        gui_frame_desc.speech_chiff_amount = app->speech_chiff_amount;
+        gui_frame_desc.speech_chiff_decay_seconds = app->speech_chiff_decay_seconds;
         gui_frame_desc.effective_drive_requested = (f32) active_render_source->last_requested_drive;
         gui_frame_desc.effective_drive_applied = (f32) active_render_source->last_applied_drive;
         gui_frame_desc.effective_drive_saturation_ratio = (f32) active_render_source->last_drive_saturation_ratio;
@@ -768,6 +847,21 @@ int App_Run (void)
         if (gui_actions.request_set_windchest_pressure)
         {
             SetWindchestPressure(app, gui_actions.windchest_pressure);
+        }
+
+        if (gui_actions.request_set_speech_attack_seconds)
+        {
+            SetSpeechAttackSeconds(app, gui_actions.speech_attack_seconds);
+        }
+
+        if (gui_actions.request_set_speech_chiff_amount)
+        {
+            SetSpeechChiffAmount(app, gui_actions.speech_chiff_amount);
+        }
+
+        if (gui_actions.request_set_speech_chiff_decay_seconds)
+        {
+            SetSpeechChiffDecaySeconds(app, gui_actions.speech_chiff_decay_seconds);
         }
 
         if (gui_actions.request_set_master_gain)

@@ -347,6 +347,24 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
             frame_actions->request_set_windchest_pressure = true;
         }
 
+        frame_actions->speech_attack_seconds = frame_desc->speech_attack_seconds;
+        if (ImGui::SliderFloat("Speech Attack (s)", &frame_actions->speech_attack_seconds, 0.0f, 0.25f, "%.3f"))
+        {
+            frame_actions->request_set_speech_attack_seconds = true;
+        }
+
+        frame_actions->speech_chiff_amount = frame_desc->speech_chiff_amount;
+        if (ImGui::SliderFloat("Speech Chiff Amt", &frame_actions->speech_chiff_amount, 0.0f, 2.0f, "%.3f"))
+        {
+            frame_actions->request_set_speech_chiff_amount = true;
+        }
+
+        frame_actions->speech_chiff_decay_seconds = frame_desc->speech_chiff_decay_seconds;
+        if (ImGui::SliderFloat("Speech Chiff Decay (s)", &frame_actions->speech_chiff_decay_seconds, 0.005f, 0.25f, "%.3f"))
+        {
+            frame_actions->request_set_speech_chiff_decay_seconds = true;
+        }
+
         ImGui::Text("Effective Drive Requested: %.6f", frame_desc->effective_drive_requested);
         ImGui::Text("Effective Drive Applied:   %.6f", frame_desc->effective_drive_applied);
         ImGui::Text("Drive Saturation Ratio:    %.3f", frame_desc->effective_drive_saturation_ratio);

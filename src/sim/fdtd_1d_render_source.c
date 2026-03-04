@@ -22,6 +22,10 @@ static const f64 FEEDBACK_VELOCITY_COEFFICIENT = 0.25;
 static const f64 MAX_SAFE_DRIVE_AMPLITUDE = 0.002;
 static const f64 JET_LABIUM_SOFT_DRIVE_SCALE = 0.0035;
 static const f64 JET_LABIUM_HARD_DRIVE_LIMIT = 0.01;
+static const f64 MAX_SAFE_STARTUP_CHIFF_NOISE = 0.0025;
+static const f64 DEFAULT_SPEECH_ATTACK_SECONDS = 0.06;
+static const f64 DEFAULT_SPEECH_CHIFF_AMOUNT = 0.35;
+static const f64 DEFAULT_SPEECH_CHIFF_DECAY_SECONDS = 0.05;
 
 static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
 {
@@ -41,6 +45,11 @@ static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
 static f64 ClampNonNegativeF64 (f64 value)
 {
     return (value < 0.0) ? 0.0 : value;
+}
+
+static f64 ClampUnitF64 (f64 value)
+{
+    return ClampF64(value, 0.0, 1.0);
 }
 
 static f64 ComputeSmoothedDriveAmplitude (f64 current_value, f64 target_value, f64 block_seconds)
@@ -72,6 +81,39 @@ static f64 ComputeSoftLimitedDrive (f64 requested_drive, f64 soft_scale, f64 har
 
     soft_limited = soft_scale * tanh(requested_drive / soft_scale);
     return ClampF64(soft_limited, 0.0, hard_limit);
+}
+
+static bool IsSpeechExcitationMode (Fdtd1DExcitationMode excitation_mode)
+{
+    switch (excitation_mode)
+    {
+        case FDTD_1D_EXCITATION_MODE_CONSTANT:
+        case FDTD_1D_EXCITATION_MODE_NOISE:
+        case FDTD_1D_EXCITATION_MODE_BIAS_AND_NOISE:
+        case FDTD_1D_EXCITATION_MODE_FEEDBACK_MOUTH:
+        case FDTD_1D_EXCITATION_MODE_NONLINEAR_MOUTH:
+        case FDTD_1D_EXCITATION_MODE_JET_LABIUM:
+        {
+            return true;
+        }
+
+        case FDTD_1D_EXCITATION_MODE_IMPULSE:
+        {
+            return false;
+        }
+    }
+
+    ASSERT(false);
+    return false;
+}
+
+static void RestartSpeechState (Fdtd1DRenderSource *source)
+{
+    ASSERT(source != NULL);
+
+    source->speech_gate = 0.0;
+    source->speech_onset_seconds = 0.0;
+    source->speech_is_active = false;
 }
 
 static f64 ComputeAverageMouthFeedbackSignal (
@@ -187,6 +229,21 @@ bool Fdtd1DRenderSource_Initialize (
     source->smoothed_drive_amplitude = desc->drive_amplitude;
     source->windchest_pressure = ClampNonNegativeF64(desc->windchest_pressure);
     source->smoothed_windchest_pressure = source->windchest_pressure;
+    source->speech_attack_seconds =
+        (desc->speech_attack_seconds > 0.0) ?
+            ClampNonNegativeF64(desc->speech_attack_seconds) :
+            DEFAULT_SPEECH_ATTACK_SECONDS;
+    source->speech_chiff_amount =
+        (desc->speech_chiff_amount > 0.0) ?
+            ClampNonNegativeF64(desc->speech_chiff_amount) :
+            DEFAULT_SPEECH_CHIFF_AMOUNT;
+    source->speech_chiff_decay_seconds =
+        (desc->speech_chiff_decay_seconds > 0.0) ?
+            ClampNonNegativeF64(desc->speech_chiff_decay_seconds) :
+            DEFAULT_SPEECH_CHIFF_DECAY_SECONDS;
+    source->speech_gate = 0.0;
+    source->speech_onset_seconds = 0.0;
+    source->speech_is_active = false;
     source->last_requested_drive = 0.0;
     source->last_applied_drive = 0.0;
     source->last_drive_saturation_ratio = 0.0;
@@ -208,6 +265,7 @@ void Fdtd1DRenderSource_TriggerStartupImpulse (Fdtd1DRenderSource *source)
     ASSERT(source != NULL);
 
     source->startup_impulse_is_pending = true;
+    RestartSpeechState(source);
 }
 
 void Fdtd1DRenderSource_SetOutputExtractionMode (
@@ -254,6 +312,36 @@ void Fdtd1DRenderSource_SetWindchestPressure (Fdtd1DRenderSource *source, f64 wi
     source->windchest_pressure = ClampNonNegativeF64(windchest_pressure);
 }
 
+void Fdtd1DRenderSource_SetSpeechAttackSeconds (Fdtd1DRenderSource *source, f64 speech_attack_seconds)
+{
+    ASSERT(source != NULL);
+
+    source->speech_attack_seconds = ClampNonNegativeF64(speech_attack_seconds);
+}
+
+void Fdtd1DRenderSource_SetSpeechChiffAmount (Fdtd1DRenderSource *source, f64 speech_chiff_amount)
+{
+    ASSERT(source != NULL);
+
+    source->speech_chiff_amount = ClampNonNegativeF64(speech_chiff_amount);
+}
+
+void Fdtd1DRenderSource_SetSpeechChiffDecaySeconds (
+    Fdtd1DRenderSource *source,
+    f64 speech_chiff_decay_seconds
+)
+{
+    ASSERT(source != NULL);
+
+    source->speech_chiff_decay_seconds = ClampNonNegativeF64(speech_chiff_decay_seconds);
+}
+
+void Fdtd1DRenderSource_RestartSpeech (Fdtd1DRenderSource *source)
+{
+    ASSERT(source != NULL);
+    RestartSpeechState(source);
+}
+
 void Fdtd1DRenderSource_Render (
     void *user_data,
     f32 *output,
@@ -270,8 +358,13 @@ void Fdtd1DRenderSource_Render (
     f64 block_seconds;
     f64 effective_drive_amplitude;
     f64 feedback_signal;
+    f64 requested_drive_amplitude;
     f64 smoothed_drive_amplitude;
     f64 smoothed_windchest_pressure;
+    f64 speech_gate_alpha;
+    f64 speech_gated_drive_amplitude;
+    f64 speech_chiff_gain;
+    f64 speech_chiff_noise_amplitude;
     usize frame_index;
     usize output_sample_count;
 
@@ -305,7 +398,51 @@ void Fdtd1DRenderSource_Render (
     smoothed_drive_amplitude = source->smoothed_drive_amplitude;
     smoothed_windchest_pressure = source->smoothed_windchest_pressure;
     effective_drive_amplitude = smoothed_drive_amplitude * smoothed_windchest_pressure;
+    requested_drive_amplitude = effective_drive_amplitude;
     feedback_signal = ComputeAverageMouthFeedbackSignal(simulation, state);
+    speech_chiff_noise_amplitude = 0.0;
+
+    if (IsSpeechExcitationMode(source->excitation_mode) && (effective_drive_amplitude > 0.0))
+    {
+        if (source->speech_is_active == false)
+        {
+            source->speech_gate = 0.0;
+            source->speech_onset_seconds = 0.0;
+            source->speech_is_active = true;
+        }
+
+        if (source->speech_attack_seconds <= 0.0)
+        {
+            source->speech_gate = 1.0;
+        }
+        else
+        {
+            speech_gate_alpha = 1.0 - exp(-block_seconds / source->speech_attack_seconds);
+            source->speech_gate += (1.0 - source->speech_gate) * speech_gate_alpha;
+            source->speech_gate = ClampUnitF64(source->speech_gate);
+        }
+
+        source->speech_onset_seconds += block_seconds;
+        speech_gated_drive_amplitude = effective_drive_amplitude * source->speech_gate;
+
+        speech_chiff_gain = 1.0;
+        if ((source->speech_chiff_amount > 0.0) && (source->speech_chiff_decay_seconds > 0.0))
+        {
+            speech_chiff_gain += source->speech_chiff_amount *
+                exp(-source->speech_onset_seconds / source->speech_chiff_decay_seconds);
+            speech_chiff_noise_amplitude = requested_drive_amplitude *
+                source->speech_chiff_amount *
+                exp(-source->speech_onset_seconds / source->speech_chiff_decay_seconds);
+        }
+
+        requested_drive_amplitude = speech_gated_drive_amplitude * speech_chiff_gain;
+    }
+    else
+    {
+        source->speech_gate = 0.0;
+        source->speech_onset_seconds = 0.0;
+        source->speech_is_active = false;
+    }
 
     /* Rebuild the excitation set every block so GUI changes take effect immediately. */
     Simulation_ClearExcitations(simulation);
@@ -325,7 +462,7 @@ void Fdtd1DRenderSource_Render (
         }
     }
 
-    if (effective_drive_amplitude > 0.0)
+    if (requested_drive_amplitude > 0.0)
     {
         switch (source->excitation_mode)
         {
@@ -342,7 +479,7 @@ void Fdtd1DRenderSource_Render (
                 );
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = effective_drive_amplitude;
+                excitation.value = requested_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;
@@ -356,7 +493,7 @@ void Fdtd1DRenderSource_Render (
                 );
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = effective_drive_amplitude;
+                excitation.value = requested_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;
@@ -379,7 +516,7 @@ void Fdtd1DRenderSource_Render (
                 excitation.type = constant_type;
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = effective_drive_amplitude;
+                excitation.value = requested_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
 
@@ -387,7 +524,7 @@ void Fdtd1DRenderSource_Render (
                 excitation.type = noise_type;
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = effective_drive_amplitude * BIAS_AND_NOISE_NOISE_SCALE;
+                excitation.value = requested_drive_amplitude * BIAS_AND_NOISE_NOISE_SCALE;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;
@@ -407,7 +544,7 @@ void Fdtd1DRenderSource_Render (
                     FDTD_1D_EXCITATION_MODE_NOISE
                 );
 
-                feedback_drive_amplitude = effective_drive_amplitude - feedback_signal;
+                feedback_drive_amplitude = requested_drive_amplitude - feedback_signal;
                 feedback_drive_amplitude = ClampF64(
                     feedback_drive_amplitude,
                     0.0,
@@ -435,7 +572,7 @@ void Fdtd1DRenderSource_Render (
             {
                 f64 bounded_drive_amplitude;
 
-                bounded_drive_amplitude = ClampF64(effective_drive_amplitude, 0.0, MAX_SAFE_DRIVE_AMPLITUDE);
+                bounded_drive_amplitude = ClampF64(requested_drive_amplitude, 0.0, MAX_SAFE_DRIVE_AMPLITUDE);
 
                 memset(&excitation, 0, sizeof(excitation));
                 excitation.type = SIMULATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
@@ -451,15 +588,15 @@ void Fdtd1DRenderSource_Render (
                 f64 applied_drive_amplitude;
 
                 applied_drive_amplitude = ComputeSoftLimitedDrive(
-                    effective_drive_amplitude,
+                    requested_drive_amplitude,
                     JET_LABIUM_SOFT_DRIVE_SCALE,
                     JET_LABIUM_HARD_DRIVE_LIMIT
                 );
-                source->last_requested_drive = effective_drive_amplitude;
+                source->last_requested_drive = requested_drive_amplitude;
                 source->last_applied_drive = applied_drive_amplitude;
                 source->last_drive_saturation_ratio =
-                    (effective_drive_amplitude > 0.0) ?
-                        (applied_drive_amplitude / effective_drive_amplitude) :
+                    (requested_drive_amplitude > 0.0) ?
+                        (applied_drive_amplitude / requested_drive_amplitude) :
                         0.0;
 
                 memset(&excitation, 0, sizeof(excitation));
@@ -469,6 +606,21 @@ void Fdtd1DRenderSource_Render (
                 excitation.value = applied_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
+
+                if (speech_chiff_noise_amplitude > 0.0)
+                {
+                    memset(&excitation, 0, sizeof(excitation));
+                    excitation.type = SIMULATION_EXCITATION_TYPE_VELOCITY_NOISE;
+                    excitation.target_index = source->startup_impulse_target_index;
+                    excitation.remaining_frame_count = block_frame_count;
+                    excitation.value = ClampF64(
+                        speech_chiff_noise_amplitude,
+                        0.0,
+                        MAX_SAFE_STARTUP_CHIFF_NOISE
+                    );
+                    excitation.is_active = true;
+                    Simulation_QueueExcitation(simulation, &excitation);
+                }
             } break;
         }
     }

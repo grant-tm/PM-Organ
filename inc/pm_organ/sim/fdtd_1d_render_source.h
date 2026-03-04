@@ -35,6 +35,9 @@ typedef struct Fdtd1DRenderSourceDesc
     Fdtd1DSourceCouplingMode source_coupling_mode;
     f64 drive_amplitude;
     f64 windchest_pressure;
+    f64 speech_attack_seconds;
+    f64 speech_chiff_amount;
+    f64 speech_chiff_decay_seconds;
     Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_enabled;
     u32 startup_impulse_target_index;
@@ -50,6 +53,12 @@ typedef struct Fdtd1DRenderSource
     f64 smoothed_drive_amplitude;
     f64 windchest_pressure;
     f64 smoothed_windchest_pressure;
+    f64 speech_attack_seconds;
+    f64 speech_chiff_amount;
+    f64 speech_chiff_decay_seconds;
+    f64 speech_gate;
+    f64 speech_onset_seconds;
+    bool speech_is_active;
     f64 last_requested_drive;
     f64 last_applied_drive;
     f64 last_drive_saturation_ratio;
@@ -80,6 +89,13 @@ void Fdtd1DRenderSource_SetSourceCouplingMode (
 );
 void Fdtd1DRenderSource_SetDriveAmplitude (Fdtd1DRenderSource *source, f64 drive_amplitude);
 void Fdtd1DRenderSource_SetWindchestPressure (Fdtd1DRenderSource *source, f64 windchest_pressure);
+void Fdtd1DRenderSource_SetSpeechAttackSeconds (Fdtd1DRenderSource *source, f64 speech_attack_seconds);
+void Fdtd1DRenderSource_SetSpeechChiffAmount (Fdtd1DRenderSource *source, f64 speech_chiff_amount);
+void Fdtd1DRenderSource_SetSpeechChiffDecaySeconds (
+    Fdtd1DRenderSource *source,
+    f64 speech_chiff_decay_seconds
+);
+void Fdtd1DRenderSource_RestartSpeech (Fdtd1DRenderSource *source);
 void Fdtd1DRenderSource_Render (
     void *user_data,
     f32 *output,
