@@ -93,6 +93,8 @@ static void RenderEngineBlock (
 
 int App_Run (void)
 {
+    static const f64 TEST_COURANT_NUMBER = 0.9;
+
     AppState *app;
     AudioDeviceDesc audio_desc;
     AudioEngineDesc engine_desc;
@@ -155,13 +157,13 @@ int App_Run (void)
     fdtd_render_source_desc.solver_desc.sample_rate = engine_desc.sample_rate;
     fdtd_render_source_desc.solver_desc.block_frame_count = engine_desc.block_frame_count;
     fdtd_render_source_desc.solver_desc.output_channel_count = engine_desc.channel_count;
-    fdtd_render_source_desc.solver_desc.tube_length_m = 0.914666667;
+    fdtd_render_source_desc.solver_desc.tube_length_m = 128.0 * (343.0 / (TEST_COURANT_NUMBER * 48000.0));
     fdtd_render_source_desc.solver_desc.wave_speed_m_per_s = 343.0;
     fdtd_render_source_desc.solver_desc.density_kg_per_m3 = 1.225;
-    fdtd_render_source_desc.solver_desc.dx = 343.0 / 48000.0;
+    fdtd_render_source_desc.solver_desc.dx = 343.0 / (TEST_COURANT_NUMBER * 48000.0);
     fdtd_render_source_desc.solver_desc.pressure_cell_count = 128;
     fdtd_render_source_desc.solver_desc.velocity_cell_count = 129;
-    fdtd_render_source_desc.solver_desc.courant_number = 1.0;
+    fdtd_render_source_desc.solver_desc.courant_number = TEST_COURANT_NUMBER;
     fdtd_render_source_desc.solver_desc.uniform_area_m2 = 0.01;
     fdtd_render_source_desc.solver_desc.uniform_loss = 0.0;
     fdtd_render_source_desc.solver_desc.left_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;

@@ -38,6 +38,8 @@ static void ConfigureSolver (
     Fdtd1DSourceDesc *source_descs
 )
 {
+    static const f64 TEST_COURANT_NUMBER = 0.9;
+
     ASSERT(desc != NULL);
     ASSERT(probe_descs != NULL);
     ASSERT(source_descs != NULL);
@@ -56,13 +58,13 @@ static void ConfigureSolver (
     desc->sample_rate = 48000;
     desc->block_frame_count = 64;
     desc->output_channel_count = 2;
-    desc->tube_length_m = 0.914666667;
+    desc->tube_length_m = 128.0 * (343.0 / (TEST_COURANT_NUMBER * 48000.0));
     desc->wave_speed_m_per_s = 343.0;
     desc->density_kg_per_m3 = 1.225;
-    desc->dx = 343.0 / 48000.0;
+    desc->dx = 343.0 / (TEST_COURANT_NUMBER * 48000.0);
     desc->pressure_cell_count = 128;
     desc->velocity_cell_count = 129;
-    desc->courant_number = 1.0;
+    desc->courant_number = TEST_COURANT_NUMBER;
     desc->uniform_area_m2 = 0.01;
     desc->uniform_loss = 0.0;
     desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
