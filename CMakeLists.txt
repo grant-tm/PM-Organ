@@ -6,6 +6,32 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+function(pm_organ_configure_target target_name)
+    target_include_directories(${target_name} PRIVATE
+        inc
+    )
+
+    target_compile_definitions(${target_name} PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+
+    if (MSVC)
+        target_compile_options(${target_name} PRIVATE
+            /W4
+            /WX
+            /wd4201
+        )
+    else ()
+        target_compile_options(${target_name} PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Werror
+        )
+    endif ()
+endfunction ()
+
 add_executable(pm_organ WIN32
     src/app/app.c
     src/audio/audio_device.c
@@ -22,9 +48,7 @@ add_executable(pm_organ WIN32
     src/platform/win32/window_win32.c
 )
 
-target_include_directories(pm_organ PRIVATE
-    inc
-)
+pm_organ_configure_target(pm_organ)
 
 target_link_libraries(pm_organ PRIVATE
     avrt
@@ -32,22 +56,11 @@ target_link_libraries(pm_organ PRIVATE
     uuid
 )
 
-target_compile_definitions(pm_organ PRIVATE
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
+add_executable(fdtd_1d_verify
+    tools/fdtd_1d_verify.c
+    src/core/memory_arena.c
+    src/sim/fdtd_1d.c
+    src/sim/simulation.c
 )
 
-if (MSVC)
-    target_compile_options(pm_organ PRIVATE
-        /W4
-        /WX
-        /wd4201
-    )
-else ()
-    target_compile_options(pm_organ PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Werror
-    )
-endif ()
+pm_organ_configure_target(fdtd_1d_verify)
