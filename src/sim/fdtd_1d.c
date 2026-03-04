@@ -6,7 +6,7 @@
 
 static const f64 FDTD_1D_PI = 3.14159265358979323846;
 static const f64 OPEN_END_CORRECTION_COEFFICIENT = 0.61;
-static const f64 OPEN_END_MAX_RADIATION_LOSS = 0.25;
+static const f64 OPEN_END_RADIATION_RESISTANCE_SCALE = 1.0;
 
 static f64 AbsF64 (f64 value)
 {
@@ -187,10 +187,10 @@ static void ResetStateCallback (Simulation *simulation)
 
     memset(state->pressure, 0, sizeof(f32) * (usize) state->pressure_cell_count);
     memset(state->velocity, 0, sizeof(f32) * (usize) state->velocity_cell_count);
-    memset(state->left_open_delay_line, 0, sizeof(state->left_open_delay_line));
-    memset(state->right_open_delay_line, 0, sizeof(state->right_open_delay_line));
-    state->left_open_delay_write_index = 0;
-    state->right_open_delay_write_index = 0;
+    state->left_previous_outgoing_pressure = 0.0f;
+    state->left_previous_incoming_pressure = 0.0f;
+    state->right_previous_outgoing_pressure = 0.0f;
+    state->right_previous_incoming_pressure = 0.0f;
     state->noise_state = 0x13572468u;
 }
 
@@ -218,13 +218,40 @@ static void InjectDistributedPressureImpulse (Fdtd1DState *state, u32 cell_index
     state->pressure[cell_index] += amplitude;
 }
 
+static f32 FilterOpenBoundaryReflection (
+    const Fdtd1DState *state,
+    f32 outgoing_pressure,
+    f32 *previous_outgoing_pressure,
+    f32 *previous_incoming_pressure
+)
+{
+    f32 incoming_pressure;
+
+    ASSERT(state != NULL);
+    ASSERT(previous_outgoing_pressure != NULL);
+    ASSERT(previous_incoming_pressure != NULL);
+
+    incoming_pressure =
+        -state->open_reflection_filter_a1 * (*previous_incoming_pressure) +
+        state->open_reflection_filter_b0 * outgoing_pressure +
+        state->open_reflection_filter_b1 * (*previous_outgoing_pressure);
+
+    *previous_outgoing_pressure = outgoing_pressure;
+    *previous_incoming_pressure = incoming_pressure;
+
+    return incoming_pressure;
+}
+
 static void UpdateVelocityField (Fdtd1DState *state)
 {
+    f32 characteristic_impedance;
     u32 velocity_index;
 
     ASSERT(state != NULL);
     ASSERT(state->pressure_cell_count > 0);
     ASSERT(state->velocity_cell_count == (state->pressure_cell_count + 1));
+
+    characteristic_impedance = (f32) state->characteristic_impedance;
 
     for (velocity_index = 1; velocity_index < (state->velocity_cell_count - 1); velocity_index += 1)
     {
@@ -243,19 +270,25 @@ static void UpdateVelocityField (Fdtd1DState *state)
         case FDTD_1D_BOUNDARY_TYPE_OPEN:
         case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
         {
-            f32 reflected_pressure;
+            f32 incoming_pressure;
+            f32 outgoing_pressure;
 
+            outgoing_pressure = 0.5f * (state->pressure[0] - characteristic_impedance * state->velocity[0]);
             if (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
-                reflected_pressure = state->left_reflection_coefficient * state->pressure[0];
+                incoming_pressure = FilterOpenBoundaryReflection(
+                    state,
+                    outgoing_pressure,
+                    &state->left_previous_outgoing_pressure,
+                    &state->left_previous_incoming_pressure
+                );
             }
             else
             {
-                reflected_pressure = state->left_reflection_coefficient * state->pressure[0];
+                incoming_pressure = state->left_reflection_coefficient * outgoing_pressure;
             }
 
-            state->velocity[0] -= state->velocity_update_coeff[0] *
-                (state->pressure[0] - reflected_pressure);
+            state->velocity[0] = (incoming_pressure - outgoing_pressure) / characteristic_impedance;
             state->velocity[0] *= (1.0f - state->velocity_loss[0]);
         } break;
     }
@@ -270,20 +303,29 @@ static void UpdateVelocityField (Fdtd1DState *state)
         case FDTD_1D_BOUNDARY_TYPE_OPEN:
         case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
         {
-            f32 reflected_pressure;
+            f32 incoming_pressure;
+            f32 outgoing_pressure;
 
+            outgoing_pressure = 0.5f * (
+                state->pressure[state->pressure_cell_count - 1] +
+                characteristic_impedance * state->velocity[state->velocity_cell_count - 1]
+            );
             if (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
-                reflected_pressure = state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1];
+                incoming_pressure = FilterOpenBoundaryReflection(
+                    state,
+                    outgoing_pressure,
+                    &state->right_previous_outgoing_pressure,
+                    &state->right_previous_incoming_pressure
+                );
             }
             else
             {
-                reflected_pressure = state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1];
+                incoming_pressure = state->right_reflection_coefficient * outgoing_pressure;
             }
 
-            state->velocity[state->velocity_cell_count - 1] -=
-                state->velocity_update_coeff[state->velocity_cell_count - 1] *
-                (reflected_pressure - state->pressure[state->pressure_cell_count - 1]);
+            state->velocity[state->velocity_cell_count - 1] =
+                (outgoing_pressure - incoming_pressure) / characteristic_impedance;
             state->velocity[state->velocity_cell_count - 1] *=
                 (1.0f - state->velocity_loss[state->velocity_cell_count - 1]);
         } break;
@@ -581,12 +623,19 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     SimulationConfig config;
     SimulationInterface simulation_interface;
     Fdtd1DState *state;
+    f64 bilinear_scale;
+    f64 denominator_0;
+    f64 denominator_1;
     f64 dt;
     f64 end_correction_m;
-    f64 open_boundary_loss;
     f64 pipe_radius_m;
     f64 pressure_update_coeff;
-    f64 reflection_magnitude;
+    f64 radiation_inertance;
+    f64 radiation_resistance;
+    f64 reflection_denominator_constant;
+    f64 reflection_denominator_slope;
+    f64 reflection_numerator_constant;
+    f64 reflection_numerator_slope;
     f64 velocity_update_coeff;
     u32 probe_index;
     u32 source_index;
@@ -631,6 +680,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     state->wave_speed_m_per_s = desc->wave_speed_m_per_s;
     state->density_kg_per_m3 = desc->density_kg_per_m3;
     state->courant_number = ComputeCourantNumber(desc);
+    state->characteristic_impedance = desc->density_kg_per_m3 * desc->wave_speed_m_per_s;
 
     state->pressure = MEMORY_ARENA_PUSH_ARRAY(arena, desc->pressure_cell_count, f32);
     state->velocity = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
@@ -721,25 +771,34 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
 
     pipe_radius_m = sqrt(desc->uniform_area_m2 / FDTD_1D_PI);
     end_correction_m = OPEN_END_CORRECTION_COEFFICIENT * pipe_radius_m;
-    open_boundary_loss = end_correction_m / (desc->tube_length_m + end_correction_m);
-    if (open_boundary_loss > OPEN_END_MAX_RADIATION_LOSS)
-    {
-        open_boundary_loss = OPEN_END_MAX_RADIATION_LOSS;
-    }
+    radiation_inertance = desc->density_kg_per_m3 * end_correction_m;
+    radiation_resistance = OPEN_END_RADIATION_RESISTANCE_SCALE * state->characteristic_impedance;
+    bilinear_scale = 2.0 / state->dt;
 
-    reflection_magnitude = 1.0 - open_boundary_loss;
+    reflection_numerator_slope =
+        (radiation_resistance - state->characteristic_impedance) * radiation_inertance;
+    reflection_numerator_constant = -state->characteristic_impedance * radiation_resistance;
+    reflection_denominator_slope =
+        (radiation_resistance + state->characteristic_impedance) * radiation_inertance;
+    reflection_denominator_constant = state->characteristic_impedance * radiation_resistance;
 
-    state->left_open_delay_samples = (f32) (end_correction_m / (state->wave_speed_m_per_s * state->dt));
-    state->right_open_delay_samples = state->left_open_delay_samples;
+    denominator_0 = reflection_denominator_slope * bilinear_scale + reflection_denominator_constant;
+    denominator_1 = -reflection_denominator_slope * bilinear_scale + reflection_denominator_constant;
+
+    state->open_reflection_filter_a1 = (f32) (denominator_1 / denominator_0);
+    state->open_reflection_filter_b0 =
+        (f32) ((reflection_numerator_slope * bilinear_scale + reflection_numerator_constant) / denominator_0);
+    state->open_reflection_filter_b1 =
+        (f32) ((-reflection_numerator_slope * bilinear_scale + reflection_numerator_constant) / denominator_0);
 
     if (desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)
     {
-        state->left_reflection_coefficient = (f32) (-reflection_magnitude);
+        state->left_reflection_coefficient = -1.0f;
     }
 
     if (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)
     {
-        state->right_reflection_coefficient = (f32) (-reflection_magnitude);
+        state->right_reflection_coefficient = -1.0f;
     }
 
     solver->desc = *desc;

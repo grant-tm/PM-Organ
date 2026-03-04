@@ -5,8 +5,6 @@
 #include "pm_organ/core/types.h"
 #include "pm_organ/sim/simulation.h"
 
-#define FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY 64
-
 typedef enum Fdtd1DBoundaryType
 {
     FDTD_1D_BOUNDARY_TYPE_RIGID = 0,
@@ -80,6 +78,7 @@ typedef struct Fdtd1DState
     f64 wave_speed_m_per_s;
     f64 density_kg_per_m3;
     f64 courant_number;
+    f64 characteristic_impedance;
 
     f32 *pressure;
     f32 *velocity;
@@ -103,12 +102,13 @@ typedef struct Fdtd1DState
     Fdtd1DBoundaryType right_boundary_type;
     f32 left_reflection_coefficient;
     f32 right_reflection_coefficient;
-    f32 left_open_delay_samples;
-    f32 right_open_delay_samples;
-    u32 left_open_delay_write_index;
-    u32 right_open_delay_write_index;
-    f32 left_open_delay_line[FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY];
-    f32 right_open_delay_line[FDTD_1D_OPEN_BOUNDARY_DELAY_CAPACITY];
+    f32 open_reflection_filter_a1;
+    f32 open_reflection_filter_b0;
+    f32 open_reflection_filter_b1;
+    f32 left_previous_outgoing_pressure;
+    f32 left_previous_incoming_pressure;
+    f32 right_previous_outgoing_pressure;
+    f32 right_previous_incoming_pressure;
     u32 noise_state;
 } Fdtd1DState;
 
