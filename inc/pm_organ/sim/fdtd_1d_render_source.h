@@ -16,12 +16,21 @@ typedef enum Fdtd1DExcitationMode
     FDTD_1D_EXCITATION_MODE_IMPULSE = 0,
     FDTD_1D_EXCITATION_MODE_CONSTANT,
     FDTD_1D_EXCITATION_MODE_NOISE,
+    FDTD_1D_EXCITATION_MODE_BIAS_AND_NOISE,
+    FDTD_1D_EXCITATION_MODE_FEEDBACK_MOUTH,
 } Fdtd1DExcitationMode;
+
+typedef enum Fdtd1DSourceCouplingMode
+{
+    FDTD_1D_SOURCE_COUPLING_MODE_PRESSURE = 0,
+    FDTD_1D_SOURCE_COUPLING_MODE_VELOCITY,
+} Fdtd1DSourceCouplingMode;
 
 typedef struct Fdtd1DRenderSourceDesc
 {
     Fdtd1DDesc solver_desc;
     Fdtd1DExcitationMode excitation_mode;
+    Fdtd1DSourceCouplingMode source_coupling_mode;
     f64 drive_amplitude;
     Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_enabled;
@@ -33,7 +42,9 @@ typedef struct Fdtd1DRenderSource
 {
     Fdtd1D solver;
     Fdtd1DExcitationMode excitation_mode;
+    Fdtd1DSourceCouplingMode source_coupling_mode;
     f64 drive_amplitude;
+    f64 smoothed_drive_amplitude;
     Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_pending;
     u32 startup_impulse_target_index;
@@ -54,6 +65,10 @@ void Fdtd1DRenderSource_SetOutputExtractionMode (
 void Fdtd1DRenderSource_SetExcitationMode (
     Fdtd1DRenderSource *source,
     Fdtd1DExcitationMode excitation_mode
+);
+void Fdtd1DRenderSource_SetSourceCouplingMode (
+    Fdtd1DRenderSource *source,
+    Fdtd1DSourceCouplingMode source_coupling_mode
 );
 void Fdtd1DRenderSource_SetDriveAmplitude (Fdtd1DRenderSource *source, f64 drive_amplitude);
 void Fdtd1DRenderSource_Render (

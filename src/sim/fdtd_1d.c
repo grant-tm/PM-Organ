@@ -253,6 +253,22 @@ static void InjectDistributedPressureImpulse (Fdtd1DState *state, u32 cell_index
     state->pressure[cell_index] += amplitude;
 }
 
+static void InjectVelocityExcitation (Fdtd1DState *state, u32 cell_index, f32 amplitude)
+{
+    u32 velocity_index;
+
+    ASSERT(state != NULL);
+    ASSERT(cell_index < state->pressure_cell_count);
+
+    velocity_index = cell_index;
+    if (velocity_index >= state->velocity_cell_count)
+    {
+        velocity_index = state->velocity_cell_count - 1;
+    }
+
+    state->velocity[velocity_index] += amplitude;
+}
+
 static f32 FilterOpenBoundaryReflection (
     f32 filter_a1,
     f32 filter_b0,
@@ -540,6 +556,22 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
                 excitation_sample = (f32) excitation->value * NextNoiseSample(state);
             } break;
 
+            case SIMULATION_EXCITATION_TYPE_VELOCITY_IMPULSE:
+            {
+                excitation_sample = (f32) excitation->value;
+                excitation->remaining_frame_count = 0;
+            } break;
+
+            case SIMULATION_EXCITATION_TYPE_VELOCITY_CONSTANT:
+            {
+                excitation_sample = (f32) excitation->value;
+            } break;
+
+            case SIMULATION_EXCITATION_TYPE_VELOCITY_NOISE:
+            {
+                excitation_sample = (f32) excitation->value * NextNoiseSample(state);
+            } break;
+
             case SIMULATION_EXCITATION_TYPE_CUSTOM:
             {
             } break;
@@ -548,6 +580,15 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
         if (excitation->type == SIMULATION_EXCITATION_TYPE_IMPULSE)
         {
             InjectDistributedPressureImpulse(state, cell_index, excitation_sample);
+        }
+        else if (excitation->type == SIMULATION_EXCITATION_TYPE_VELOCITY_IMPULSE)
+        {
+            InjectVelocityExcitation(state, cell_index, excitation_sample);
+        }
+        else if ((excitation->type == SIMULATION_EXCITATION_TYPE_VELOCITY_CONSTANT) ||
+                 (excitation->type == SIMULATION_EXCITATION_TYPE_VELOCITY_NOISE))
+        {
+            InjectVelocityExcitation(state, cell_index, excitation_sample);
         }
         else
         {
@@ -560,8 +601,10 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
         }
 
         if ((excitation->type == SIMULATION_EXCITATION_TYPE_IMPULSE) ||
+            (excitation->type == SIMULATION_EXCITATION_TYPE_VELOCITY_IMPULSE) ||
             ((excitation->remaining_frame_count == 0) &&
              (excitation->type != SIMULATION_EXCITATION_TYPE_CONSTANT) &&
+             (excitation->type != SIMULATION_EXCITATION_TYPE_VELOCITY_CONSTANT) &&
              (excitation->type != SIMULATION_EXCITATION_TYPE_CUSTOM)))
         {
             excitation->is_active = false;

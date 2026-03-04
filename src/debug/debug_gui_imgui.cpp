@@ -342,6 +342,20 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
         }
 
         ImGui::Separator();
+        ImGui::Text("Source Coupling");
+        for (preset_index = 0; preset_index < frame_desc->source_coupling_mode_count; preset_index += 1)
+        {
+            bool is_selected;
+
+            is_selected = (preset_index == frame_desc->active_source_coupling_mode);
+            if (ImGui::Selectable(frame_desc->source_coupling_mode_names[preset_index], is_selected))
+            {
+                frame_actions->request_select_source_coupling_mode = true;
+                frame_actions->selected_source_coupling_mode = (u32) preset_index;
+            }
+        }
+
+        ImGui::Separator();
         ImGui::Text("Output Extraction");
         for (preset_index = 0; preset_index < frame_desc->output_extraction_mode_count; preset_index += 1)
         {

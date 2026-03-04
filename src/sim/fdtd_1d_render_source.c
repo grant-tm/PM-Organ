@@ -1,3 +1,4 @@
+#include <math.h>
 #include <string.h>
 
 #include "pm_organ/core/assert.h"
@@ -12,6 +13,128 @@ enum
     RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_PRESSURE,
     RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_VELOCITY,
 };
+
+static const f64 DRIVE_SMOOTHING_SECONDS = 0.05;
+static const f64 BIAS_AND_NOISE_NOISE_SCALE = 0.35;
+static const f64 FEEDBACK_NOISE_SCALE = 0.10;
+static const f64 FEEDBACK_PRESSURE_COEFFICIENT = 0.65;
+static const f64 FEEDBACK_VELOCITY_COEFFICIENT = 0.25;
+static const f64 MAX_SAFE_DRIVE_AMPLITUDE = 0.01;
+
+static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
+    }
+
+    if (value > max_value)
+    {
+        return max_value;
+    }
+
+    return value;
+}
+
+static f64 ComputeSmoothedDriveAmplitude (f64 current_value, f64 target_value, f64 block_seconds)
+{
+    f64 smoothing_alpha;
+
+    if (DRIVE_SMOOTHING_SECONDS <= 0.0)
+    {
+        return target_value;
+    }
+
+    smoothing_alpha = 1.0 - exp(-block_seconds / DRIVE_SMOOTHING_SECONDS);
+    return current_value + (target_value - current_value) * smoothing_alpha;
+}
+
+static f64 ComputeAverageMouthFeedbackSignal (
+    const Simulation *simulation,
+    const Fdtd1DState *state
+)
+{
+    f64 pressure_sum;
+    f64 velocity_sum;
+    f64 pressure_weight;
+    f64 velocity_weight;
+    usize frame_index;
+
+    ASSERT(simulation != NULL);
+    ASSERT(state != NULL);
+
+    if ((simulation->probe_buffer == NULL) || (simulation->config.probe_count < 6))
+    {
+        return 0.0;
+    }
+
+    pressure_sum = 0.0;
+    velocity_sum = 0.0;
+
+    for (frame_index = 0; frame_index < simulation->config.block_frame_count; frame_index += 1)
+    {
+        f32 mouth_pressure;
+        f32 mouth_velocity;
+        usize probe_offset;
+
+        probe_offset = frame_index * (usize) simulation->config.probe_count;
+        if (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
+        {
+            mouth_pressure = simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_LEFT_MOUTH_PRESSURE];
+            mouth_velocity = simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_LEFT_MOUTH_VELOCITY];
+        }
+        else
+        {
+            mouth_pressure = simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_PRESSURE];
+            mouth_velocity = simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_VELOCITY];
+        }
+
+        pressure_sum += (f64) mouth_pressure;
+        velocity_sum += (f64) mouth_velocity;
+    }
+
+    pressure_sum /= (f64) simulation->config.block_frame_count;
+    velocity_sum /= (f64) simulation->config.block_frame_count;
+
+    pressure_weight = FEEDBACK_PRESSURE_COEFFICIENT;
+    velocity_weight = FEEDBACK_VELOCITY_COEFFICIENT * state->characteristic_impedance;
+
+    return (pressure_weight * pressure_sum) + (velocity_weight * velocity_sum);
+}
+
+static SimulationExcitationType GetContinuousExcitationType (
+    Fdtd1DSourceCouplingMode source_coupling_mode,
+    Fdtd1DExcitationMode excitation_mode
+)
+{
+    switch (source_coupling_mode)
+    {
+        case FDTD_1D_SOURCE_COUPLING_MODE_PRESSURE:
+        {
+            switch (excitation_mode)
+            {
+                case FDTD_1D_EXCITATION_MODE_CONSTANT: return SIMULATION_EXCITATION_TYPE_CONSTANT;
+                case FDTD_1D_EXCITATION_MODE_NOISE: return SIMULATION_EXCITATION_TYPE_NOISE;
+                case FDTD_1D_EXCITATION_MODE_IMPULSE:
+                case FDTD_1D_EXCITATION_MODE_BIAS_AND_NOISE: break;
+            }
+        } break;
+
+        case FDTD_1D_SOURCE_COUPLING_MODE_VELOCITY:
+        {
+            switch (excitation_mode)
+            {
+                case FDTD_1D_EXCITATION_MODE_CONSTANT: return SIMULATION_EXCITATION_TYPE_VELOCITY_CONSTANT;
+                case FDTD_1D_EXCITATION_MODE_NOISE: return SIMULATION_EXCITATION_TYPE_VELOCITY_NOISE;
+                case FDTD_1D_EXCITATION_MODE_IMPULSE:
+                case FDTD_1D_EXCITATION_MODE_BIAS_AND_NOISE: break;
+            }
+        } break;
+    }
+
+    ASSERT(false);
+    return SIMULATION_EXCITATION_TYPE_NONE;
+}
 
 bool Fdtd1DRenderSource_Initialize (
     Fdtd1DRenderSource *source,
@@ -34,7 +157,9 @@ bool Fdtd1DRenderSource_Initialize (
     source->startup_impulse_target_index = desc->startup_impulse_target_index;
     source->startup_impulse_amplitude = desc->startup_impulse_amplitude;
     source->excitation_mode = desc->excitation_mode;
+    source->source_coupling_mode = desc->source_coupling_mode;
     source->drive_amplitude = desc->drive_amplitude;
+    source->smoothed_drive_amplitude = desc->drive_amplitude;
     source->output_extraction_mode = desc->output_extraction_mode;
 
     return true;
@@ -75,6 +200,16 @@ void Fdtd1DRenderSource_SetExcitationMode (
     source->excitation_mode = excitation_mode;
 }
 
+void Fdtd1DRenderSource_SetSourceCouplingMode (
+    Fdtd1DRenderSource *source,
+    Fdtd1DSourceCouplingMode source_coupling_mode
+)
+{
+    ASSERT(source != NULL);
+
+    source->source_coupling_mode = source_coupling_mode;
+}
+
 void Fdtd1DRenderSource_SetDriveAmplitude (Fdtd1DRenderSource *source, f64 drive_amplitude)
 {
     ASSERT(source != NULL);
@@ -95,6 +230,9 @@ void Fdtd1DRenderSource_Render (
     Fdtd1DRenderSource *source;
     Simulation *simulation;
     SimulationExcitation excitation;
+    f64 block_seconds;
+    f64 feedback_signal;
+    f64 smoothed_drive_amplitude;
     usize frame_index;
     usize output_sample_count;
 
@@ -114,6 +252,15 @@ void Fdtd1DRenderSource_Render (
     ASSERT(simulation->config.sample_rate == sample_rate);
     ASSERT(state != NULL);
 
+    block_seconds = (f64) block_frame_count / (f64) sample_rate;
+    source->smoothed_drive_amplitude = ComputeSmoothedDriveAmplitude(
+        source->smoothed_drive_amplitude,
+        source->drive_amplitude,
+        block_seconds
+    );
+    smoothed_drive_amplitude = source->smoothed_drive_amplitude;
+    feedback_signal = ComputeAverageMouthFeedbackSignal(simulation, state);
+
     /* Rebuild the excitation set every block so GUI changes take effect immediately. */
     Simulation_ClearExcitations(simulation);
 
@@ -132,7 +279,7 @@ void Fdtd1DRenderSource_Render (
         }
     }
 
-    if (source->drive_amplitude > 0.0)
+    if (smoothed_drive_amplitude > 0.0)
     {
         switch (source->excitation_mode)
         {
@@ -141,15 +288,99 @@ void Fdtd1DRenderSource_Render (
             } break;
 
             case FDTD_1D_EXCITATION_MODE_CONSTANT:
+            {
+                memset(&excitation, 0, sizeof(excitation));
+                excitation.type = GetContinuousExcitationType(
+                    source->source_coupling_mode,
+                    source->excitation_mode
+                );
+                excitation.target_index = source->startup_impulse_target_index;
+                excitation.remaining_frame_count = block_frame_count;
+                excitation.value = smoothed_drive_amplitude;
+                excitation.is_active = true;
+                Simulation_QueueExcitation(simulation, &excitation);
+            } break;
+
             case FDTD_1D_EXCITATION_MODE_NOISE:
             {
                 memset(&excitation, 0, sizeof(excitation));
-                excitation.type = (source->excitation_mode == FDTD_1D_EXCITATION_MODE_CONSTANT) ?
-                    SIMULATION_EXCITATION_TYPE_CONSTANT :
-                    SIMULATION_EXCITATION_TYPE_NOISE;
+                excitation.type = GetContinuousExcitationType(
+                    source->source_coupling_mode,
+                    source->excitation_mode
+                );
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
-                excitation.value = source->drive_amplitude;
+                excitation.value = smoothed_drive_amplitude;
+                excitation.is_active = true;
+                Simulation_QueueExcitation(simulation, &excitation);
+            } break;
+
+            case FDTD_1D_EXCITATION_MODE_BIAS_AND_NOISE:
+            {
+                SimulationExcitationType constant_type;
+                SimulationExcitationType noise_type;
+
+                constant_type = GetContinuousExcitationType(
+                    source->source_coupling_mode,
+                    FDTD_1D_EXCITATION_MODE_CONSTANT
+                );
+                noise_type = GetContinuousExcitationType(
+                    source->source_coupling_mode,
+                    FDTD_1D_EXCITATION_MODE_NOISE
+                );
+
+                memset(&excitation, 0, sizeof(excitation));
+                excitation.type = constant_type;
+                excitation.target_index = source->startup_impulse_target_index;
+                excitation.remaining_frame_count = block_frame_count;
+                excitation.value = smoothed_drive_amplitude;
+                excitation.is_active = true;
+                Simulation_QueueExcitation(simulation, &excitation);
+
+                memset(&excitation, 0, sizeof(excitation));
+                excitation.type = noise_type;
+                excitation.target_index = source->startup_impulse_target_index;
+                excitation.remaining_frame_count = block_frame_count;
+                excitation.value = smoothed_drive_amplitude * BIAS_AND_NOISE_NOISE_SCALE;
+                excitation.is_active = true;
+                Simulation_QueueExcitation(simulation, &excitation);
+            } break;
+
+            case FDTD_1D_EXCITATION_MODE_FEEDBACK_MOUTH:
+            {
+                SimulationExcitationType constant_type;
+                SimulationExcitationType noise_type;
+                f64 feedback_drive_amplitude;
+
+                constant_type = GetContinuousExcitationType(
+                    source->source_coupling_mode,
+                    FDTD_1D_EXCITATION_MODE_CONSTANT
+                );
+                noise_type = GetContinuousExcitationType(
+                    source->source_coupling_mode,
+                    FDTD_1D_EXCITATION_MODE_NOISE
+                );
+
+                feedback_drive_amplitude = smoothed_drive_amplitude - feedback_signal;
+                feedback_drive_amplitude = ClampF64(
+                    feedback_drive_amplitude,
+                    0.0,
+                    MAX_SAFE_DRIVE_AMPLITUDE
+                );
+
+                memset(&excitation, 0, sizeof(excitation));
+                excitation.type = constant_type;
+                excitation.target_index = source->startup_impulse_target_index;
+                excitation.remaining_frame_count = block_frame_count;
+                excitation.value = feedback_drive_amplitude;
+                excitation.is_active = true;
+                Simulation_QueueExcitation(simulation, &excitation);
+
+                memset(&excitation, 0, sizeof(excitation));
+                excitation.type = noise_type;
+                excitation.target_index = source->startup_impulse_target_index;
+                excitation.remaining_frame_count = block_frame_count;
+                excitation.value = feedback_drive_amplitude * FEEDBACK_NOISE_SCALE;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;

@@ -36,8 +36,17 @@ typedef enum AppExcitationMode
     APP_EXCITATION_MODE_IMPULSE = 0,
     APP_EXCITATION_MODE_CONSTANT,
     APP_EXCITATION_MODE_NOISE,
+    APP_EXCITATION_MODE_BIAS_AND_NOISE,
+    APP_EXCITATION_MODE_FEEDBACK_MOUTH,
     APP_EXCITATION_MODE_COUNT,
 } AppExcitationMode;
+
+typedef enum AppSourceCouplingMode
+{
+    APP_SOURCE_COUPLING_MODE_PRESSURE = 0,
+    APP_SOURCE_COUPLING_MODE_VELOCITY,
+    APP_SOURCE_COUPLING_MODE_COUNT,
+} AppSourceCouplingMode;
 
 typedef struct AppState
 {
@@ -50,6 +59,7 @@ typedef struct AppState
     TestToneSource test_tone_source;
     FdtdPresetType active_fdtd_preset;
     AppExcitationMode active_excitation_mode;
+    AppSourceCouplingMode active_source_coupling_mode;
     AppOutputExtractionMode active_output_extraction_mode;
     f32 drive_amplitude;
     bool fdtd_source_is_active;
@@ -78,11 +88,26 @@ static Fdtd1DExcitationMode ToRenderSourceExcitationMode (AppExcitationMode app_
         case APP_EXCITATION_MODE_IMPULSE: return FDTD_1D_EXCITATION_MODE_IMPULSE;
         case APP_EXCITATION_MODE_CONSTANT: return FDTD_1D_EXCITATION_MODE_CONSTANT;
         case APP_EXCITATION_MODE_NOISE: return FDTD_1D_EXCITATION_MODE_NOISE;
+        case APP_EXCITATION_MODE_BIAS_AND_NOISE: return FDTD_1D_EXCITATION_MODE_BIAS_AND_NOISE;
+        case APP_EXCITATION_MODE_FEEDBACK_MOUTH: return FDTD_1D_EXCITATION_MODE_FEEDBACK_MOUTH;
         case APP_EXCITATION_MODE_COUNT: break;
     }
 
     ASSERT(false);
     return FDTD_1D_EXCITATION_MODE_IMPULSE;
+}
+
+static Fdtd1DSourceCouplingMode ToRenderSourceSourceCouplingMode (AppSourceCouplingMode app_mode)
+{
+    switch (app_mode)
+    {
+        case APP_SOURCE_COUPLING_MODE_PRESSURE: return FDTD_1D_SOURCE_COUPLING_MODE_PRESSURE;
+        case APP_SOURCE_COUPLING_MODE_VELOCITY: return FDTD_1D_SOURCE_COUPLING_MODE_VELOCITY;
+        case APP_SOURCE_COUPLING_MODE_COUNT: break;
+    }
+
+    ASSERT(false);
+    return FDTD_1D_SOURCE_COUPLING_MODE_PRESSURE;
 }
 
 static const char *GetFdtdPresetName (FdtdPresetType preset_type)
@@ -107,7 +132,22 @@ static const char *GetExcitationModeName (AppExcitationMode excitation_mode)
         case APP_EXCITATION_MODE_IMPULSE: return "Impulse";
         case APP_EXCITATION_MODE_CONSTANT: return "Constant";
         case APP_EXCITATION_MODE_NOISE: return "Noise";
+        case APP_EXCITATION_MODE_BIAS_AND_NOISE: return "Bias + Noise";
+        case APP_EXCITATION_MODE_FEEDBACK_MOUTH: return "Feedback Mouth";
         case APP_EXCITATION_MODE_COUNT: break;
+    }
+
+    ASSERT(false);
+    return "Unknown";
+}
+
+static const char *GetSourceCouplingModeName (AppSourceCouplingMode source_coupling_mode)
+{
+    switch (source_coupling_mode)
+    {
+        case APP_SOURCE_COUPLING_MODE_PRESSURE: return "Pressure";
+        case APP_SOURCE_COUPLING_MODE_VELOCITY: return "Velocity";
+        case APP_SOURCE_COUPLING_MODE_COUNT: break;
     }
 
     ASSERT(false);
@@ -185,7 +225,7 @@ static void BuildFdtdPresetDesc (
     probe_descs[5].output_channel_index = 1;
     probe_descs[5].is_enabled = true;
 
-    source_descs[0].cell_index = 24;
+    source_descs[0].cell_index = 6;
     source_descs[0].is_enabled = true;
 
     memset(render_source_desc, 0, sizeof(*render_source_desc));
@@ -210,6 +250,7 @@ static void BuildFdtdPresetDesc (
     render_source_desc->solver_desc.source_count = 1;
     render_source_desc->solver_desc.source_descs = source_descs;
     render_source_desc->excitation_mode = FDTD_1D_EXCITATION_MODE_IMPULSE;
+    render_source_desc->source_coupling_mode = FDTD_1D_SOURCE_COUPLING_MODE_PRESSURE;
     render_source_desc->drive_amplitude = 0.0;
     render_source_desc->output_extraction_mode = FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     render_source_desc->startup_impulse_is_enabled = true;
@@ -311,6 +352,10 @@ static void ApplyExcitationSettingsToSources (AppState *app)
             &app->fdtd_render_sources[preset_type],
             ToRenderSourceExcitationMode(app->active_excitation_mode)
         );
+        Fdtd1DRenderSource_SetSourceCouplingMode(
+            &app->fdtd_render_sources[preset_type],
+            ToRenderSourceSourceCouplingMode(app->active_source_coupling_mode)
+        );
         Fdtd1DRenderSource_SetDriveAmplitude(
             &app->fdtd_render_sources[preset_type],
             (f64) app->drive_amplitude
@@ -370,6 +415,15 @@ static void SelectExcitationMode (AppState *app, AppExcitationMode excitation_mo
     ASSERT(excitation_mode < APP_EXCITATION_MODE_COUNT);
 
     app->active_excitation_mode = excitation_mode;
+    ApplyExcitationSettingsToSources(app);
+}
+
+static void SelectSourceCouplingMode (AppState *app, AppSourceCouplingMode source_coupling_mode)
+{
+    ASSERT(app != NULL);
+    ASSERT(source_coupling_mode < APP_SOURCE_COUPLING_MODE_COUNT);
+
+    app->active_source_coupling_mode = source_coupling_mode;
     ApplyExcitationSettingsToSources(app);
 }
 
@@ -557,6 +611,7 @@ int App_Run (void)
     app->previous_cycle_is_down = false;
     app->active_fdtd_preset = FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED;
     app->active_excitation_mode = APP_EXCITATION_MODE_IMPULSE;
+    app->active_source_coupling_mode = APP_SOURCE_COUPLING_MODE_PRESSURE;
     app->active_output_extraction_mode = APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     app->drive_amplitude = 0.0f;
     ApplyExcitationSettingsToSources(app);
@@ -592,6 +647,7 @@ int App_Run (void)
         DebugGuiFrameActions gui_actions;
         DebugGuiFrameDesc gui_frame_desc;
         const char *excitation_mode_names[APP_EXCITATION_MODE_COUNT];
+        const char *source_coupling_mode_names[APP_SOURCE_COUPLING_MODE_COUNT];
         const char *output_extraction_mode_names[APP_OUTPUT_EXTRACTION_MODE_COUNT];
         const char *preset_names[FDTD_PRESET_TYPE_COUNT];
 
@@ -606,6 +662,10 @@ int App_Run (void)
         excitation_mode_names[0] = GetExcitationModeName(APP_EXCITATION_MODE_IMPULSE);
         excitation_mode_names[1] = GetExcitationModeName(APP_EXCITATION_MODE_CONSTANT);
         excitation_mode_names[2] = GetExcitationModeName(APP_EXCITATION_MODE_NOISE);
+        excitation_mode_names[3] = GetExcitationModeName(APP_EXCITATION_MODE_BIAS_AND_NOISE);
+        excitation_mode_names[4] = GetExcitationModeName(APP_EXCITATION_MODE_FEEDBACK_MOUTH);
+        source_coupling_mode_names[0] = GetSourceCouplingModeName(APP_SOURCE_COUPLING_MODE_PRESSURE);
+        source_coupling_mode_names[1] = GetSourceCouplingModeName(APP_SOURCE_COUPLING_MODE_VELOCITY);
         output_extraction_mode_names[0] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES);
         output_extraction_mode_names[1] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION);
 
@@ -614,10 +674,13 @@ int App_Run (void)
         gui_frame_desc.active_preset_index = app->active_fdtd_preset;
         gui_frame_desc.active_excitation_mode = app->active_excitation_mode;
         gui_frame_desc.excitation_mode_count = APP_EXCITATION_MODE_COUNT;
+        gui_frame_desc.active_source_coupling_mode = app->active_source_coupling_mode;
+        gui_frame_desc.source_coupling_mode_count = APP_SOURCE_COUPLING_MODE_COUNT;
         gui_frame_desc.active_output_extraction_mode = app->active_output_extraction_mode;
         gui_frame_desc.output_extraction_mode_count = APP_OUTPUT_EXTRACTION_MODE_COUNT;
         gui_frame_desc.preset_count = FDTD_PRESET_TYPE_COUNT;
         gui_frame_desc.excitation_mode_names = excitation_mode_names;
+        gui_frame_desc.source_coupling_mode_names = source_coupling_mode_names;
         gui_frame_desc.output_extraction_mode_names = output_extraction_mode_names;
         gui_frame_desc.preset_names = preset_names;
         gui_frame_desc.delta_seconds = app->frame_timer.delta_seconds;
@@ -643,6 +706,11 @@ int App_Run (void)
         if (gui_actions.request_select_excitation_mode)
         {
             SelectExcitationMode(app, (AppExcitationMode) gui_actions.selected_excitation_mode);
+        }
+
+        if (gui_actions.request_select_source_coupling_mode)
+        {
+            SelectSourceCouplingMode(app, (AppSourceCouplingMode) gui_actions.selected_source_coupling_mode);
         }
 
         if (gui_actions.request_select_output_extraction_mode)
