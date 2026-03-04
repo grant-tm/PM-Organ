@@ -7,6 +7,7 @@
 static const f64 FDTD_1D_PI = 3.14159265358979323846;
 static const f64 OPEN_END_CORRECTION_COEFFICIENT = 0.45;
 static const f64 OPEN_END_RADIATION_RESISTANCE_SCALE = 1.5;
+static const u32 NONLINEAR_MOUTH_DELAY_SAMPLES = 8;
 
 static f64 AbsF64 (f64 value)
 {
@@ -214,6 +215,7 @@ static void BuildSimulationConfig (const Fdtd1DDesc *desc, SimulationConfig *con
 static void ResetStateCallback (Simulation *simulation)
 {
     Fdtd1DState *state;
+    usize delay_sample_count;
 
     ASSERT(simulation != NULL);
 
@@ -227,6 +229,13 @@ static void ResetStateCallback (Simulation *simulation)
     state->right_previous_outgoing_pressure = 0.0f;
     state->right_previous_incoming_pressure = 0.0f;
     state->noise_state = 0x13572468u;
+
+    if ((state->mouth_feedback_delay_buffer != NULL) && (state->source_count > 0))
+    {
+        delay_sample_count = (usize) state->source_count * (usize) state->mouth_feedback_delay_capacity;
+        memset(state->mouth_feedback_delay_buffer, 0, sizeof(f32) * delay_sample_count);
+        memset(state->mouth_feedback_delay_indices, 0, sizeof(u32) * (usize) state->source_count);
+    }
 }
 
 static f32 NextNoiseSample (Fdtd1DState *state)
@@ -235,6 +244,21 @@ static f32 NextNoiseSample (Fdtd1DState *state)
 
     state->noise_state = state->noise_state * 1664525u + 1013904223u;
     return ((f32) ((state->noise_state >> 8) & 0x00FFFFFFu) / 8388607.5f) - 1.0f;
+}
+
+static f32 ClampF32 (f32 value, f32 min_value, f32 max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
+    }
+
+    if (value > max_value)
+    {
+        return max_value;
+    }
+
+    return value;
 }
 
 static void InjectDistributedPressureImpulse (Fdtd1DState *state, u32 cell_index, f32 amplitude)
@@ -267,6 +291,62 @@ static void InjectVelocityExcitation (Fdtd1DState *state, u32 cell_index, f32 am
     }
 
     state->velocity[velocity_index] += amplitude;
+}
+
+static f32 ComputeNonlinearMouthExcitation (
+    Fdtd1DState *state,
+    u32 source_index,
+    u32 cell_index,
+    f32 wind_drive
+)
+{
+    static const f32 NONLINEAR_MOUTH_MAX_OUTPUT = 0.0012f;
+    static const f32 NONLINEAR_MOUTH_NOISE_SCALE = 0.04f;
+    static const f32 NONLINEAR_MOUTH_PRESSURE_FEEDBACK = 0.45f;
+    static const f32 NONLINEAR_MOUTH_VELOCITY_FEEDBACK = 0.12f;
+    static const f32 NONLINEAR_MOUTH_SATURATION_GAIN = 80.0f;
+    f32 delayed_feedback;
+    f32 feedback_signal;
+    f32 local_pressure;
+    f32 local_velocity;
+    f32 mouth_input;
+    f32 *delay_buffer;
+    u32 delay_index;
+    u32 velocity_index;
+
+    ASSERT(state != NULL);
+    ASSERT(source_index < state->source_count);
+    ASSERT(cell_index < state->pressure_cell_count);
+    ASSERT(state->mouth_feedback_delay_buffer != NULL);
+    ASSERT(state->mouth_feedback_delay_lengths != NULL);
+    ASSERT(state->mouth_feedback_delay_indices != NULL);
+
+    velocity_index = cell_index;
+    if (velocity_index >= state->velocity_cell_count)
+    {
+        velocity_index = state->velocity_cell_count - 1;
+    }
+
+    local_pressure = state->pressure[cell_index];
+    local_velocity = state->velocity[velocity_index];
+    feedback_signal =
+        (NONLINEAR_MOUTH_PRESSURE_FEEDBACK * local_pressure) +
+        (NONLINEAR_MOUTH_VELOCITY_FEEDBACK * (f32) state->characteristic_impedance * local_velocity);
+
+    delay_buffer = state->mouth_feedback_delay_buffer +
+        ((usize) source_index * (usize) state->mouth_feedback_delay_capacity);
+    delay_index = state->mouth_feedback_delay_indices[source_index];
+    delayed_feedback = delay_buffer[delay_index];
+    delay_buffer[delay_index] = feedback_signal;
+    state->mouth_feedback_delay_indices[source_index] =
+        (delay_index + 1) % state->mouth_feedback_delay_lengths[source_index];
+
+    mouth_input =
+        wind_drive +
+        (wind_drive * NONLINEAR_MOUTH_NOISE_SCALE * NextNoiseSample(state)) -
+        delayed_feedback;
+
+    return NONLINEAR_MOUTH_MAX_OUTPUT * tanhf(NONLINEAR_MOUTH_SATURATION_GAIN * mouth_input);
 }
 
 static f32 FilterOpenBoundaryReflection (
@@ -572,6 +652,16 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
                 excitation_sample = (f32) excitation->value * NextNoiseSample(state);
             } break;
 
+            case SIMULATION_EXCITATION_TYPE_NONLINEAR_MOUTH:
+            {
+                excitation_sample = ComputeNonlinearMouthExcitation(
+                    state,
+                    source_index,
+                    cell_index,
+                    ClampF32((f32) excitation->value, 0.0f, 0.002f)
+                );
+            } break;
+
             case SIMULATION_EXCITATION_TYPE_CUSTOM:
             {
             } break;
@@ -586,7 +676,8 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
             InjectVelocityExcitation(state, cell_index, excitation_sample);
         }
         else if ((excitation->type == SIMULATION_EXCITATION_TYPE_VELOCITY_CONSTANT) ||
-                 (excitation->type == SIMULATION_EXCITATION_TYPE_VELOCITY_NOISE))
+                 (excitation->type == SIMULATION_EXCITATION_TYPE_VELOCITY_NOISE) ||
+                 (excitation->type == SIMULATION_EXCITATION_TYPE_NONLINEAR_MOUTH))
         {
             InjectVelocityExcitation(state, cell_index, excitation_sample);
         }
@@ -605,6 +696,7 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
             ((excitation->remaining_frame_count == 0) &&
              (excitation->type != SIMULATION_EXCITATION_TYPE_CONSTANT) &&
              (excitation->type != SIMULATION_EXCITATION_TYPE_VELOCITY_CONSTANT) &&
+             (excitation->type != SIMULATION_EXCITATION_TYPE_NONLINEAR_MOUTH) &&
              (excitation->type != SIMULATION_EXCITATION_TYPE_CUSTOM)))
         {
             excitation->is_active = false;
@@ -898,7 +990,18 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     if (desc->source_count > 0)
     {
         state->source_cell_indices = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
-        if (state->source_cell_indices == NULL)
+        state->mouth_feedback_delay_lengths = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
+        state->mouth_feedback_delay_indices = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
+        state->mouth_feedback_delay_capacity = NONLINEAR_MOUTH_DELAY_SAMPLES;
+        state->mouth_feedback_delay_buffer = MEMORY_ARENA_PUSH_ARRAY(
+            arena,
+            (usize) desc->source_count * (usize) state->mouth_feedback_delay_capacity,
+            f32
+        );
+        if ((state->source_cell_indices == NULL) ||
+            (state->mouth_feedback_delay_lengths == NULL) ||
+            (state->mouth_feedback_delay_indices == NULL) ||
+            (state->mouth_feedback_delay_buffer == NULL))
         {
             Simulation_Shutdown(&solver->simulation);
             return false;
@@ -935,6 +1038,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     for (source_index = 0; source_index < desc->source_count; source_index += 1)
     {
         state->source_cell_indices[source_index] = desc->source_descs[source_index].cell_index;
+        state->mouth_feedback_delay_lengths[source_index] = NONLINEAR_MOUTH_DELAY_SAMPLES;
+        state->mouth_feedback_delay_indices[source_index] = 0;
     }
 
     state->left_boundary_type = desc->left_boundary.type;

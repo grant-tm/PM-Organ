@@ -25,6 +25,8 @@ typedef struct AudioEngine
     AudioEngineDesc config;
     AudioEngineRenderSourceCallback *render_source_callback;
     void *render_source_user_data;
+    f32 master_gain;
+    bool output_is_muted;
     f32 *mix_buffer;
     f32 *scratch_buffer;
 } AudioEngine;
@@ -37,5 +39,8 @@ void AudioEngine_SetRenderSource (
     AudioEngineRenderSourceCallback *render_callback,
     void *user_data
 );
+void AudioEngine_SetMasterGain (AudioEngine *engine, f32 master_gain);
+void AudioEngine_SetOutputMuted (AudioEngine *engine, bool output_is_muted);
+void AudioEngine_KillOutput (AudioEngine *engine);
 
 #endif // PM_ORGAN_AUDIO_AUDIO_ENGINE_H

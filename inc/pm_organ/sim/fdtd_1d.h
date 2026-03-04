@@ -107,6 +107,10 @@ typedef struct Fdtd1DState
     u32 *probe_output_channels;
 
     u32 *source_cell_indices;
+    f32 *mouth_feedback_delay_buffer;
+    u32 *mouth_feedback_delay_lengths;
+    u32 *mouth_feedback_delay_indices;
+    u32 mouth_feedback_delay_capacity;
 
     Fdtd1DBoundaryType left_boundary_type;
     Fdtd1DBoundaryType right_boundary_type;

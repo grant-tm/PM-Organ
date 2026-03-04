@@ -1,7 +1,52 @@
+#include <math.h>
 #include <string.h>
 
 #include "pm_organ/audio/audio_engine.h"
 #include "pm_organ/core/assert.h"
+
+static const f32 OUTPUT_SAFETY_TARGET_PEAK = 0.12f;
+static const f32 OUTPUT_SAFETY_SOFT_CLIP_DRIVE = 6.0f;
+
+static f32 AbsF32 (f32 value)
+{
+    return (value < 0.0f) ? -value : value;
+}
+
+static void ApplyOutputSafety (f32 *samples, usize sample_count)
+{
+    f32 block_peak;
+    f32 block_gain;
+    usize sample_index;
+
+    ASSERT(samples != NULL);
+
+    block_peak = 0.0f;
+    for (sample_index = 0; sample_index < sample_count; sample_index += 1)
+    {
+        f32 abs_value;
+
+        abs_value = AbsF32(samples[sample_index]);
+        if (abs_value > block_peak)
+        {
+            block_peak = abs_value;
+        }
+    }
+
+    block_gain = 1.0f;
+    if (block_peak > OUTPUT_SAFETY_TARGET_PEAK)
+    {
+        block_gain = OUTPUT_SAFETY_TARGET_PEAK / block_peak;
+    }
+
+    for (sample_index = 0; sample_index < sample_count; sample_index += 1)
+    {
+        f32 limited_sample;
+
+        limited_sample = samples[sample_index] * block_gain;
+        limited_sample = tanhf(OUTPUT_SAFETY_SOFT_CLIP_DRIVE * limited_sample) / OUTPUT_SAFETY_SOFT_CLIP_DRIVE;
+        samples[sample_index] = limited_sample;
+    }
+}
 
 static void RenderSilenceSource (
     void *user_data,
@@ -54,6 +99,8 @@ bool AudioEngine_Initialize (AudioEngine *engine, MemoryArena *arena, const Audi
 
     engine->render_source_callback = RenderSilenceSource;
     engine->render_source_user_data = NULL;
+    engine->master_gain = 1.0f;
+    engine->output_is_muted = false;
 
     return true;
 }
@@ -74,6 +121,7 @@ void AudioEngine_Shutdown (AudioEngine *engine)
 void AudioEngine_RenderBlock (AudioEngine *engine, f32 *output)
 {
     usize mix_byte_count;
+    usize mix_sample_count;
     usize scratch_byte_count;
 
     ASSERT(engine != NULL);
@@ -86,20 +134,32 @@ void AudioEngine_RenderBlock (AudioEngine *engine, f32 *output)
     ASSERT(engine->render_source_callback != NULL);
 
     mix_byte_count = sizeof(f32) * (usize) engine->config.block_frame_count * (usize) engine->config.channel_count;
+    mix_sample_count = (usize) engine->config.block_frame_count * (usize) engine->config.channel_count;
     scratch_byte_count = sizeof(f32) * (usize) engine->config.block_frame_count * (usize) engine->config.channel_count;
 
     memset(engine->mix_buffer, 0, mix_byte_count);
     memset(engine->scratch_buffer, 0, scratch_byte_count);
 
-    engine->render_source_callback(
-        engine->render_source_user_data,
-        engine->mix_buffer,
-        engine->scratch_buffer,
-        engine->config.block_frame_count,
-        engine->config.channel_count,
-        engine->config.sample_rate
-    );
+    if (engine->output_is_muted == false)
+    {
+        usize sample_index;
 
+        engine->render_source_callback(
+            engine->render_source_user_data,
+            engine->mix_buffer,
+            engine->scratch_buffer,
+            engine->config.block_frame_count,
+            engine->config.channel_count,
+            engine->config.sample_rate
+        );
+
+        for (sample_index = 0; sample_index < mix_sample_count; sample_index += 1)
+        {
+            engine->mix_buffer[sample_index] *= engine->master_gain;
+        }
+    }
+
+    ApplyOutputSafety(engine->mix_buffer, mix_sample_count);
     memcpy(output, engine->mix_buffer, mix_byte_count);
 }
 
@@ -114,4 +174,34 @@ void AudioEngine_SetRenderSource (
 
     engine->render_source_callback = render_callback;
     engine->render_source_user_data = user_data;
+}
+
+void AudioEngine_SetMasterGain (AudioEngine *engine, f32 master_gain)
+{
+    ASSERT(engine != NULL);
+
+    if (master_gain < 0.0f)
+    {
+        master_gain = 0.0f;
+    }
+    else if (master_gain > 1.0f)
+    {
+        master_gain = 1.0f;
+    }
+
+    engine->master_gain = master_gain;
+}
+
+void AudioEngine_SetOutputMuted (AudioEngine *engine, bool output_is_muted)
+{
+    ASSERT(engine != NULL);
+
+    engine->output_is_muted = output_is_muted;
+}
+
+void AudioEngine_KillOutput (AudioEngine *engine)
+{
+    ASSERT(engine != NULL);
+
+    engine->output_is_muted = true;
 }

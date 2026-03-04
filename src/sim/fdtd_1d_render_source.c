@@ -19,7 +19,7 @@ static const f64 BIAS_AND_NOISE_NOISE_SCALE = 0.35;
 static const f64 FEEDBACK_NOISE_SCALE = 0.10;
 static const f64 FEEDBACK_PRESSURE_COEFFICIENT = 0.65;
 static const f64 FEEDBACK_VELOCITY_COEFFICIENT = 0.25;
-static const f64 MAX_SAFE_DRIVE_AMPLITUDE = 0.01;
+static const f64 MAX_SAFE_DRIVE_AMPLITUDE = 0.002;
 
 static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
 {
@@ -381,6 +381,21 @@ void Fdtd1DRenderSource_Render (
                 excitation.target_index = source->startup_impulse_target_index;
                 excitation.remaining_frame_count = block_frame_count;
                 excitation.value = feedback_drive_amplitude * FEEDBACK_NOISE_SCALE;
+                excitation.is_active = true;
+                Simulation_QueueExcitation(simulation, &excitation);
+            } break;
+
+            case FDTD_1D_EXCITATION_MODE_NONLINEAR_MOUTH:
+            {
+                f64 bounded_drive_amplitude;
+
+                bounded_drive_amplitude = ClampF64(smoothed_drive_amplitude, 0.0, MAX_SAFE_DRIVE_AMPLITUDE);
+
+                memset(&excitation, 0, sizeof(excitation));
+                excitation.type = SIMULATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+                excitation.target_index = source->startup_impulse_target_index;
+                excitation.remaining_frame_count = block_frame_count;
+                excitation.value = bounded_drive_amplitude;
                 excitation.is_active = true;
                 Simulation_QueueExcitation(simulation, &excitation);
             } break;

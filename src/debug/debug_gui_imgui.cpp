@@ -342,6 +342,25 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
         }
 
         ImGui::Separator();
+        ImGui::Text("Output");
+        frame_actions->master_gain = frame_desc->master_gain;
+        if (ImGui::SliderFloat("Master Gain", &frame_actions->master_gain, 0.0f, 1.0f, "%.3f"))
+        {
+            frame_actions->request_set_master_gain = true;
+        }
+
+        frame_actions->output_is_muted = frame_desc->output_is_muted;
+        if (ImGui::Checkbox("Muted", &frame_actions->output_is_muted))
+        {
+            frame_actions->request_set_output_muted = true;
+        }
+
+        if (ImGui::Button("Kill Output"))
+        {
+            frame_actions->request_kill_output = true;
+        }
+
+        ImGui::Separator();
         ImGui::Text("Source Coupling");
         for (preset_index = 0; preset_index < frame_desc->source_coupling_mode_count; preset_index += 1)
         {
