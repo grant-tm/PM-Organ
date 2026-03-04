@@ -47,7 +47,67 @@ typedef struct ArrivalSummary
     WindowPeakResult main_lobe_peak;
 } ArrivalSummary;
 
+typedef enum VerificationPreset
+{
+    VERIFICATION_PRESET_RIGID_RIGID = 0,
+    VERIFICATION_PRESET_OPEN_OPEN,
+    VERIFICATION_PRESET_OPEN_RIGID,
+} VerificationPreset;
+
+static const char *GetBoundaryTypeName (Fdtd1DBoundaryType boundary_type)
+{
+    switch (boundary_type)
+    {
+        case FDTD_1D_BOUNDARY_TYPE_RIGID: return "rigid";
+        case FDTD_1D_BOUNDARY_TYPE_OPEN: return "open";
+        case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT: return "reflection";
+    }
+
+    ASSERT(false);
+    return "unknown";
+}
+
+static const char *GetPresetName (VerificationPreset preset)
+{
+    switch (preset)
+    {
+        case VERIFICATION_PRESET_RIGID_RIGID: return "rigid-rigid";
+        case VERIFICATION_PRESET_OPEN_OPEN: return "open-open";
+        case VERIFICATION_PRESET_OPEN_RIGID: return "open-rigid";
+    }
+
+    ASSERT(false);
+    return "unknown";
+}
+
+static bool TryParsePresetName (const char *text, VerificationPreset *preset)
+{
+    ASSERT(text != NULL);
+    ASSERT(preset != NULL);
+
+    if (_stricmp(text, "rigid-rigid") == 0)
+    {
+        *preset = VERIFICATION_PRESET_RIGID_RIGID;
+        return true;
+    }
+
+    if (_stricmp(text, "open-open") == 0)
+    {
+        *preset = VERIFICATION_PRESET_OPEN_OPEN;
+        return true;
+    }
+
+    if ((_stricmp(text, "open-rigid") == 0) || (_stricmp(text, "stopped") == 0))
+    {
+        *preset = VERIFICATION_PRESET_OPEN_RIGID;
+        return true;
+    }
+
+    return false;
+}
+
 static void ConfigureSolver (
+    VerificationPreset preset,
     Fdtd1DDesc *desc,
     Fdtd1DProbeDesc *probe_descs,
     Fdtd1DSourceDesc *source_descs
@@ -82,10 +142,33 @@ static void ConfigureSolver (
     desc->courant_number = TEST_COURANT_NUMBER;
     desc->uniform_area_m2 = 0.01;
     desc->uniform_loss = 0.00005;
-    desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
-    desc->left_boundary.reflection_coefficient = 1.0;
-    desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
-    desc->right_boundary.reflection_coefficient = 1.0;
+    switch (preset)
+    {
+        case VERIFICATION_PRESET_RIGID_RIGID:
+        {
+            desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
+            desc->left_boundary.reflection_coefficient = 1.0;
+            desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
+            desc->right_boundary.reflection_coefficient = 1.0;
+        } break;
+
+        case VERIFICATION_PRESET_OPEN_OPEN:
+        {
+            desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            desc->left_boundary.reflection_coefficient = -1.0;
+            desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            desc->right_boundary.reflection_coefficient = -1.0;
+        } break;
+
+        case VERIFICATION_PRESET_OPEN_RIGID:
+        {
+            desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+            desc->left_boundary.reflection_coefficient = -1.0;
+            desc->right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
+            desc->right_boundary.reflection_coefficient = 1.0;
+        } break;
+    }
+
     desc->probe_count = 2;
     desc->probe_descs = probe_descs;
     desc->source_count = 1;
@@ -323,6 +406,7 @@ int main (int argc, char **argv)
     static const u32 WINDOW_RADIUS = 4;
 
     const char *csv_output_path;
+    VerificationPreset preset;
     MemoryArena arena;
     Fdtd1D solver;
     Fdtd1DDesc solver_desc;
@@ -350,7 +434,22 @@ int main (int argc, char **argv)
     u32 block_index;
     int exit_code;
 
-    csv_output_path = (argc >= 2) ? argv[1] : NULL;
+    preset = VERIFICATION_PRESET_RIGID_RIGID;
+    csv_output_path = NULL;
+
+    if (argc >= 2)
+    {
+        if (TryParsePresetName(argv[1], &preset) == false)
+        {
+            csv_output_path = argv[1];
+        }
+    }
+
+    if (argc >= 3)
+    {
+        csv_output_path = argv[2];
+    }
+
     exit_code = 0;
 
     memset(&arena, 0, sizeof(arena));
@@ -365,7 +464,7 @@ int main (int argc, char **argv)
         return 1;
     }
 
-    ConfigureSolver(&solver_desc, probe_descs, source_descs);
+    ConfigureSolver(preset, &solver_desc, probe_descs, source_descs);
 
     if (Fdtd1D_Initialize(&solver, &arena, &solver_desc) == false)
     {
@@ -515,6 +614,9 @@ int main (int argc, char **argv)
     printf("\n");
 
     printf("Setup\n");
+    printf("  preset:                 %s\n",
+        GetPresetName(preset)
+    );
     printf("  sample_rate:            %u\n",
         solver_desc.sample_rate
     );
@@ -526,6 +628,12 @@ int main (int argc, char **argv)
     );
     printf("  courant:                %.6f\n",
         solver.desc.courant_number
+    );
+    printf("  left_boundary:          %s\n",
+        GetBoundaryTypeName(solver_desc.left_boundary.type)
+    );
+    printf("  right_boundary:         %s\n",
+        GetBoundaryTypeName(solver_desc.right_boundary.type)
     );
     printf("\n");
 
