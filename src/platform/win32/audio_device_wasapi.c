@@ -5,6 +5,7 @@
 #include <avrt.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
+#include <string.h>
 
 #include "pm_organ/audio/audio_device.h"
 #include "pm_organ/core/assert.h"
@@ -19,8 +20,12 @@ typedef struct Win32AudioDeviceState
     HANDLE audio_event;
     HANDLE stop_event;
     HANDLE thread_handle;
-    AudioRenderCallback *render_callback;
+    AudioRenderBlockCallback *render_callback;
     void *user_data;
+    f32 *block_buffer;
+    u32 block_frame_count;
+    u32 staged_frame_count;
+    u32 staged_frame_index;
     bool com_initialized;
 } Win32AudioDeviceState;
 
@@ -119,29 +124,73 @@ static bool IsFloatMixFormat (const WAVEFORMATEX *format)
     return false;
 }
 
+static void RefillBlockBuffer (Win32AudioDeviceState *state, AudioDevice *device)
+{
+    ASSERT(state != NULL);
+    ASSERT(device != NULL);
+    ASSERT(state->block_buffer != NULL);
+    ASSERT(state->block_frame_count > 0);
+
+    if (state->render_callback != NULL)
+    {
+        state->render_callback(
+            state->user_data,
+            state->block_buffer,
+            state->block_frame_count,
+            device->info.channel_count,
+            device->info.sample_rate
+        );
+    }
+    else
+    {
+        ZeroMemory(
+            state->block_buffer,
+            (SIZE_T) state->block_frame_count * (SIZE_T) device->info.channel_count * sizeof(f32)
+        );
+    }
+
+    state->staged_frame_count = state->block_frame_count;
+    state->staged_frame_index = 0;
+}
+
 static void FillBuffer (Win32AudioDeviceState *state, AudioDevice *device, BYTE *buffer, u32 frame_count)
 {
     f32 *output;
+    u32 output_frame_index;
 
     ASSERT(state != NULL);
     ASSERT(device != NULL);
     ASSERT(buffer != NULL);
 
     output = (f32 *) buffer;
+    output_frame_index = 0;
 
-    if (state->render_callback != NULL)
+    while (output_frame_index < frame_count)
     {
-        state->render_callback(
-            state->user_data,
-            output,
-            frame_count,
-            device->info.channel_count,
-            device->info.sample_rate
-        );
-        return;
-    }
+        u32 copy_frame_count;
+        u32 remaining_output_frames;
+        u32 available_staged_frames;
+        size_t copy_sample_count;
 
-    ZeroMemory(output, (SIZE_T) frame_count * (SIZE_T) device->info.channel_count * sizeof(f32));
+        if (state->staged_frame_index >= state->staged_frame_count)
+        {
+            RefillBlockBuffer(state, device);
+        }
+
+        remaining_output_frames = frame_count - output_frame_index;
+        available_staged_frames = state->staged_frame_count - state->staged_frame_index;
+        copy_frame_count = (remaining_output_frames < available_staged_frames) ? remaining_output_frames : available_staged_frames;
+        copy_sample_count = (size_t) copy_frame_count * (size_t) device->info.channel_count;
+
+        memcpy(
+            output + ((size_t) output_frame_index * (size_t) device->info.channel_count),
+            state->block_buffer + ((size_t) state->staged_frame_index * (size_t) device->info.channel_count),
+            copy_sample_count * sizeof(f32)
+        );
+
+        state->staged_frame_index += copy_frame_count;
+        output_frame_index += copy_frame_count;
+    }
 }
 
 static DWORD WINAPI AudioRenderThreadProc (LPVOID parameter)
@@ -246,6 +295,7 @@ bool Win32AudioDevice_Open (AudioDevice *device, MemoryArena *arena, const Audio
     ASSERT(arena != NULL);
     ASSERT(desc != NULL);
     ASSERT(desc->render_callback != NULL);
+    ASSERT(desc->block_frame_count > 0);
 
     ZeroMemory(device, sizeof(*device));
 
@@ -364,11 +414,23 @@ bool Win32AudioDevice_Open (AudioDevice *device, MemoryArena *arena, const Audio
 
     state->render_callback = desc->render_callback;
     state->user_data = desc->user_data;
+    state->block_frame_count = desc->block_frame_count;
+    state->block_buffer = MEMORY_ARENA_PUSH_ARRAY(
+        arena,
+        (size_t) desc->block_frame_count * (size_t) state->mix_format->nChannels,
+        f32
+    );
+    if (state->block_buffer == NULL)
+    {
+        DestroyState(state);
+        return false;
+    }
 
     device->backend_state = state;
     device->info.sample_rate = state->mix_format->nSamplesPerSec;
     device->info.channel_count = state->mix_format->nChannels;
     device->info.frames_per_buffer = requested_frames;
+    device->info.block_frame_count = desc->block_frame_count;
     device->info.buffer_frame_count = buffer_frame_count;
     device->info.latency_seconds = (f64) buffer_frame_count / (f64) device->info.sample_rate;
     device->is_open = true;

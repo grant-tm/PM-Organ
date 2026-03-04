@@ -21,7 +21,7 @@ typedef struct AppState
 static void RenderSineWave (
     void *user_data,
     f32 *output,
-    u32 frame_count,
+    u32 block_frame_count,
     u32 channel_count,
     u32 sample_rate
 )
@@ -36,7 +36,7 @@ static void RenderSineWave (
 
     app = (AppState *) user_data;
 
-    for (frame_index = 0; frame_index < frame_count; frame_index += 1)
+    for (frame_index = 0; frame_index < block_frame_count; frame_index += 1)
     {
         f32 sample_value;
         u32 channel_index;
@@ -94,6 +94,7 @@ int App_Run (void)
     audio_desc.sample_rate = 48000;
     audio_desc.channel_count = 2;
     audio_desc.frames_per_buffer = 256;
+    audio_desc.block_frame_count = 64;
     audio_desc.render_callback = RenderSineWave;
     audio_desc.user_data = app;
 

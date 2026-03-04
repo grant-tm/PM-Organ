@@ -4,14 +4,21 @@
 #include "pm_organ/core/memory_arena.h"
 #include "pm_organ/core/types.h"
 
-typedef void AudioRenderCallback (void *user_data, f32 *output, u32 frame_count, u32 channel_count, u32 sample_rate);
+typedef void AudioRenderBlockCallback (
+    void *user_data,
+    f32 *output,
+    u32 block_frame_count,
+    u32 channel_count,
+    u32 sample_rate
+);
 
 typedef struct AudioDeviceDesc
 {
     u32 sample_rate;
     u32 channel_count;
     u32 frames_per_buffer;
-    AudioRenderCallback *render_callback;
+    u32 block_frame_count;
+    AudioRenderBlockCallback *render_callback;
     void *user_data;
 } AudioDeviceDesc;
 
@@ -20,6 +27,7 @@ typedef struct AudioDeviceInfo
     u32 sample_rate;
     u32 channel_count;
     u32 frames_per_buffer;
+    u32 block_frame_count;
     u32 buffer_frame_count;
     f64 latency_seconds;
 } AudioDeviceInfo;
