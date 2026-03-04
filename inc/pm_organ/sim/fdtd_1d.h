@@ -89,6 +89,8 @@ typedef struct Fdtd1DState
 
     u32 *source_cell_indices;
 
+    Fdtd1DBoundaryType left_boundary_type;
+    Fdtd1DBoundaryType right_boundary_type;
     f32 left_reflection_coefficient;
     f32 right_reflection_coefficient;
     u32 noise_state;

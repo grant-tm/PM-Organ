@@ -183,18 +183,43 @@ static void UpdateVelocityField (Fdtd1DState *state)
     ASSERT(state->pressure_cell_count > 0);
     ASSERT(state->velocity_cell_count == (state->pressure_cell_count + 1));
 
-    state->velocity[0] -= state->velocity_update_coeff[0] *
-        (state->pressure[0] - state->left_reflection_coefficient * state->pressure[0]);
-
     for (velocity_index = 1; velocity_index < (state->velocity_cell_count - 1); velocity_index += 1)
     {
         state->velocity[velocity_index] -= state->velocity_update_coeff[velocity_index] *
             (state->pressure[velocity_index] - state->pressure[velocity_index - 1]);
     }
 
-    state->velocity[state->velocity_cell_count - 1] -= state->velocity_update_coeff[state->velocity_cell_count - 1] *
-        (state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1] -
-         state->pressure[state->pressure_cell_count - 1]);
+    switch (state->left_boundary_type)
+    {
+        case FDTD_1D_BOUNDARY_TYPE_RIGID:
+        {
+            state->velocity[0] = 0.0f;
+        } break;
+
+        case FDTD_1D_BOUNDARY_TYPE_OPEN:
+        case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
+        {
+            state->velocity[0] -= state->velocity_update_coeff[0] *
+                (state->pressure[0] - state->left_reflection_coefficient * state->pressure[0]);
+        } break;
+    }
+
+    switch (state->right_boundary_type)
+    {
+        case FDTD_1D_BOUNDARY_TYPE_RIGID:
+        {
+            state->velocity[state->velocity_cell_count - 1] = 0.0f;
+        } break;
+
+        case FDTD_1D_BOUNDARY_TYPE_OPEN:
+        case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
+        {
+            state->velocity[state->velocity_cell_count - 1] -=
+                state->velocity_update_coeff[state->velocity_cell_count - 1] *
+                (state->right_reflection_coefficient * state->pressure[state->pressure_cell_count - 1] -
+                 state->pressure[state->pressure_cell_count - 1]);
+        } break;
+    }
 }
 
 static void UpdatePressureField (Fdtd1DState *state)
@@ -588,6 +613,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
         state->source_cell_indices[source_index] = desc->source_descs[source_index].cell_index;
     }
 
+    state->left_boundary_type = desc->left_boundary.type;
+    state->right_boundary_type = desc->right_boundary.type;
     state->left_reflection_coefficient = GetBoundaryReflectionCoefficient(&desc->left_boundary);
     state->right_reflection_coefficient = GetBoundaryReflectionCoefficient(&desc->right_boundary);
 
