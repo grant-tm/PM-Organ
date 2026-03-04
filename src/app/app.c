@@ -306,7 +306,7 @@ int App_Run (void)
     ASSERT(app != NULL);
 
     FrameTimer_Initialize(&app->frame_timer);
-    FrameTimer_SetTargetHz(&app->frame_timer, 60.0);
+    FrameTimer_SetTargetHz(&app->frame_timer, 240.0);
 
     window_desc.title = "PM-Organ";
     window_desc.client_width = 1280;
