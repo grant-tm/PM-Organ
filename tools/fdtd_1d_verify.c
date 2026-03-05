@@ -175,6 +175,9 @@ typedef struct VerificationRunSummary
     f64 right_boundary_emission_peak_abs;
     bool left_boundary_emission_activity_ok;
     bool right_boundary_emission_activity_ok;
+    f64 modal_spacing_mean_error_percent;
+    f64 modal_spacing_max_error_percent;
+    bool modal_spacing_gate_ok;
     u32 pressure_cell_count;
     f64 tube_length_m;
 } VerificationRunSummary;
@@ -2175,6 +2178,108 @@ static void AnalyzeModeSeries (
     }
 }
 
+static bool IsOpenRigidBoundaryFamily (const Fdtd1DDesc *desc)
+{
+    ASSERT(desc != NULL);
+
+    return (((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN) &&
+             (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID)) ||
+            ((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID) &&
+             (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)));
+}
+
+static f64 GetExpectedModeMultiplier (const Fdtd1DDesc *desc, u32 mode_index)
+{
+    ASSERT(desc != NULL);
+
+    if (IsOpenRigidBoundaryFamily(desc))
+    {
+        return (f64) (2 * (i32) mode_index + 1);
+    }
+
+    return (f64) (mode_index + 1);
+}
+
+static void AnalyzeModalSpacing (
+    const Fdtd1DDesc *desc,
+    const ModeResult *mode_results,
+    u32 mode_count,
+    f64 *mean_error_percent,
+    f64 *max_error_percent,
+    bool *gate_ok
+)
+{
+    static const f64 MAX_MODE_SPACING_ERROR_PERCENT_UNIFORM = 6.0;
+    static const f64 MAX_MODE_SPACING_ERROR_PERCENT_SHAPED = 12.0;
+    f64 max_mode_spacing_error_percent;
+    f64 fundamental_measured_hz;
+    f64 error_sum_percent;
+    f64 max_error_local_percent;
+    u32 mode_index;
+    u32 error_count;
+
+    ASSERT(desc != NULL);
+    ASSERT(mode_results != NULL);
+    ASSERT(mean_error_percent != NULL);
+    ASSERT(max_error_percent != NULL);
+    ASSERT(gate_ok != NULL);
+
+    *mean_error_percent = 0.0;
+    *max_error_percent = 0.0;
+    *gate_ok = false;
+
+    if (mode_count < 2)
+    {
+        return;
+    }
+
+    max_mode_spacing_error_percent =
+        (desc->area_segment_count > 0) ?
+            MAX_MODE_SPACING_ERROR_PERCENT_SHAPED :
+            MAX_MODE_SPACING_ERROR_PERCENT_UNIFORM;
+
+    fundamental_measured_hz = mode_results[0].measured_peak_frequency_hz;
+    if (fundamental_measured_hz <= 0.0)
+    {
+        return;
+    }
+
+    error_sum_percent = 0.0;
+    max_error_local_percent = 0.0;
+    error_count = 0;
+
+    for (mode_index = 1; mode_index < mode_count; mode_index += 1)
+    {
+        f64 expected_ratio;
+        f64 measured_ratio;
+        f64 mode_error_percent;
+
+        if (mode_results[mode_index].measured_peak_frequency_hz <= 0.0)
+        {
+            continue;
+        }
+
+        expected_ratio = GetExpectedModeMultiplier(desc, mode_index) / GetExpectedModeMultiplier(desc, 0);
+        measured_ratio = mode_results[mode_index].measured_peak_frequency_hz / fundamental_measured_hz;
+        mode_error_percent = 100.0 * fabs(measured_ratio - expected_ratio) / expected_ratio;
+        error_sum_percent += mode_error_percent;
+        if (mode_error_percent > max_error_local_percent)
+        {
+            max_error_local_percent = mode_error_percent;
+        }
+        error_count += 1;
+    }
+
+    if (error_count == 0)
+    {
+        return;
+    }
+
+    *mean_error_percent = error_sum_percent / (f64) error_count;
+    *max_error_percent = max_error_local_percent;
+    *gate_ok = (*max_error_percent <= max_mode_spacing_error_percent);
+}
+
 static f64 ComputeStateEnergy (const Fdtd1DState *state)
 {
     f64 energy;
@@ -2374,6 +2479,14 @@ static bool RunVerification (
         solver_desc->block_frame_count,
         MODE_COUNT,
         summary->mode_results
+    );
+    AnalyzeModalSpacing(
+        solver_desc,
+        summary->mode_results,
+        MODE_COUNT,
+        &summary->modal_spacing_mean_error_percent,
+        &summary->modal_spacing_max_error_percent,
+        &summary->modal_spacing_gate_ok
     );
     AnalyzeSustainedBehavior(capture, solver_desc, 0, &summary->sustained);
     AnalyzeSpeechBehavior(capture, solver_desc, 0, &summary->speech);
@@ -2940,6 +3053,18 @@ int main (int argc, char **argv)
             mode_results[block_index].measured_peak_magnitude
         );
     }
+    printf("  spacing mean error:     %.3f %%\n",
+        summary.modal_spacing_mean_error_percent
+    );
+    printf("  spacing max error:      %.3f %%\n",
+        summary.modal_spacing_max_error_percent
+    );
+    printf("  spacing gate max:       %.3f %%\n",
+        (solver_desc.area_segment_count > 0) ? 12.0 : 6.0
+    );
+    printf("  spacing gate:           %s\n",
+        summary.modal_spacing_gate_ok ? "pass" : "warn"
+    );
     printf("\n");
 
     printf("Sustained Analysis\n");

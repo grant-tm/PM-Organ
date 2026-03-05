@@ -9,6 +9,9 @@ static const f64 DEFAULT_OPEN_END_CORRECTION_COEFFICIENT = 0.45;
 static const f64 DEFAULT_OPEN_END_RADIATION_RESISTANCE_SCALE = 1.5;
 static const u32 NONLINEAR_MOUTH_MAX_DELAY_SAMPLES = 64;
 static const f32 JET_LABIUM_INJECTION_MAX = 0.01f;
+static const f32 BOUNDARY_WAVE_SAFETY_CLAMP = 0.50f;
+
+static f32 ClampBoundaryWaveSample (f32 sample);
 static const Fdtd1DNonlinearMouthParameters DEFAULT_NONLINEAR_MOUTH_PARAMETERS =
 {
     0.0002f, /* max_output */
@@ -731,6 +734,7 @@ static f32 FilterOpenBoundaryReflection (
         -filter_a1 * (*previous_incoming_pressure) +
         filter_b0 * outgoing_pressure +
         filter_b1 * (*previous_outgoing_pressure);
+    incoming_pressure = ClampBoundaryWaveSample(incoming_pressure);
 
     *previous_outgoing_pressure = outgoing_pressure;
     *previous_incoming_pressure = incoming_pressure;
@@ -762,6 +766,11 @@ static f32 ComputeBoundaryEmittedSample (
 
     ASSERT(false);
     return 0.0f;
+}
+
+static f32 ClampBoundaryWaveSample (f32 sample)
+{
+    return ClampF32(sample, -BOUNDARY_WAVE_SAFETY_CLAMP, BOUNDARY_WAVE_SAFETY_CLAMP);
 }
 
 static void InitializeAreaFields (Fdtd1DState *state, const Fdtd1DDesc *desc)
@@ -981,6 +990,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
             f32 outgoing_pressure;
 
             outgoing_pressure = 0.5f * (state->pressure[0] - characteristic_impedance * state->velocity[0]);
+            outgoing_pressure = ClampBoundaryWaveSample(outgoing_pressure);
             if (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
                 incoming_pressure = FilterOpenBoundaryReflection(
@@ -995,6 +1005,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
             else
             {
                 incoming_pressure = state->left_reflection_coefficient * outgoing_pressure;
+                incoming_pressure = ClampBoundaryWaveSample(incoming_pressure);
             }
 
             state->left_boundary_outgoing_wave = outgoing_pressure;
@@ -1004,6 +1015,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
                 outgoing_pressure,
                 incoming_pressure
             );
+            state->left_boundary_emitted_sample = ClampBoundaryWaveSample(state->left_boundary_emitted_sample);
             state->velocity[0] = (incoming_pressure - outgoing_pressure) / characteristic_impedance;
             state->velocity[0] *= (1.0f - state->boundary_loss);
             state->velocity[0] = ApplyFrequencyDependentLoss(
@@ -1035,6 +1047,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
                 state->pressure[state->pressure_cell_count - 1] +
                 characteristic_impedance * state->velocity[state->velocity_cell_count - 1]
             );
+            outgoing_pressure = ClampBoundaryWaveSample(outgoing_pressure);
             if (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
                 incoming_pressure = FilterOpenBoundaryReflection(
@@ -1049,6 +1062,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
             else
             {
                 incoming_pressure = state->right_reflection_coefficient * outgoing_pressure;
+                incoming_pressure = ClampBoundaryWaveSample(incoming_pressure);
             }
 
             state->right_boundary_outgoing_wave = outgoing_pressure;
@@ -1058,6 +1072,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
                 outgoing_pressure,
                 incoming_pressure
             );
+            state->right_boundary_emitted_sample = ClampBoundaryWaveSample(state->right_boundary_emitted_sample);
             state->velocity[state->velocity_cell_count - 1] =
                 (outgoing_pressure - incoming_pressure) / characteristic_impedance;
             state->velocity[state->velocity_cell_count - 1] *=
