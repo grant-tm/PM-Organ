@@ -155,6 +155,7 @@ typedef struct VerificationSettings
     bool run_nonlinear_mouth_sweep;
     bool run_parameter_sweep;
     bool run_stage4_suite;
+    bool run_stage6_suite;
     bool run_speech_analysis;
     bool run_voicing_loop;
     const char *summary_csv_path;
@@ -290,6 +291,23 @@ typedef struct Stage4SuiteResult
     bool energy_drift_gate_ok;
     bool overall_core_gate_ok;
 } Stage4SuiteResult;
+
+typedef struct Stage6SuiteNoteResult
+{
+    u32 note_index;
+    u32 semitone_offset;
+    u32 pressure_cell_count;
+    u32 source_cell_index;
+    f64 measured_f0_hz;
+    f64 expected_ratio_from_base;
+    f64 measured_ratio_from_base;
+    f64 ratio_error_percent;
+    bool sustain_gate_ok;
+    bool attack_gate_ok;
+    bool harmonic_gate_ok;
+    bool stability_gate_ok;
+    bool overall_voicing_gate_ok;
+} Stage6SuiteNoteResult;
 
 static const char *GetProbeTypeName (Fdtd1DProbeType probe_type)
 {
@@ -527,6 +545,12 @@ static bool EvaluateVoicingHarmonicBalanceGate (
     slope_ok = (harmonic_decay_slope_db_per_harmonic >= VOICING_HARMONIC_SLOPE_MIN_DB) &&
         (harmonic_decay_slope_db_per_harmonic <= VOICING_HARMONIC_SLOPE_MAX_DB);
     return ratio_ok && slope_ok;
+}
+
+static bool EvaluateStage6RatioGate (f64 ratio_error_percent)
+{
+    static const f64 STAGE6_MAX_RATIO_ERROR_PERCENT = 3.0;
+    return fabs(ratio_error_percent) <= STAGE6_MAX_RATIO_ERROR_PERCENT;
 }
 
 static void ConfigureSolver (
@@ -898,6 +922,7 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->run_nonlinear_mouth_sweep = false;
     settings->run_parameter_sweep = false;
     settings->run_stage4_suite = false;
+    settings->run_stage6_suite = false;
     settings->run_speech_analysis = false;
     settings->run_voicing_loop = false;
     settings->summary_csv_path = NULL;
@@ -1061,6 +1086,12 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         if ((_stricmp(argument, "stage4-suite") == 0) || (_stricmp(argument, "suite-stage4") == 0))
         {
             settings->run_stage4_suite = true;
+            continue;
+        }
+
+        if ((_stricmp(argument, "stage6-suite") == 0) || (_stricmp(argument, "suite-stage6") == 0))
+        {
+            settings->run_stage6_suite = true;
             continue;
         }
 
@@ -3190,6 +3221,7 @@ int main (int argc, char **argv)
     NonlinearMouthSweepResult nonlinear_mouth_sweep_results[32];
     ParameterSweepResult parameter_sweep_results[512];
     Stage4SuiteResult stage4_suite_results[8];
+    Stage6SuiteNoteResult stage6_suite_results[16];
     Fdtd1DDesc solver_desc;
     Fdtd1DProbeDesc probe_descs[VERIFY_PROBE_COUNT];
     Fdtd1DSourceDesc source_descs[1];
@@ -3676,6 +3708,216 @@ int main (int argc, char **argv)
                 printf("summary_csv_write_failed=%s\n", settings.summary_csv_path);
             }
         }
+
+        return 0;
+    }
+
+    if (settings.run_stage6_suite)
+    {
+        static const u32 STAGE6_SEMITONE_OFFSETS[] =
+        {
+            0, 2, 4, 5, 7, 9, 11, 12
+        };
+        static const u32 STAGE6_NOTE_CELL_COUNTS[] =
+        {
+            38, 34, 30, 29, 25, 23, 20, 19
+        };
+        static const f64 STAGE6_SOURCE_RATIOS[] =
+        {
+            28.0 / 128.0,
+            29.0 / 128.0,
+            30.0 / 128.0,
+            31.0 / 128.0,
+            32.0 / 128.0,
+            34.0 / 128.0,
+            36.0 / 128.0,
+            38.0 / 128.0
+        };
+        u32 note_index;
+        u32 suite_count;
+        u32 voicing_pass_count;
+        u32 ratio_pass_count;
+        f64 base_f0_hz;
+        bool has_base_f0;
+
+        suite_count = 0;
+        voicing_pass_count = 0;
+        ratio_pass_count = 0;
+        base_f0_hz = 0.0;
+        has_base_f0 = false;
+
+        for (note_index = 0; note_index < ARRAY_COUNT(STAGE6_SEMITONE_OFFSETS); note_index += 1)
+        {
+            VerificationSettings suite_settings;
+            Stage6SuiteNoteResult *suite_result;
+            f64 note_ratio;
+            u32 semitone_offset;
+            u32 pressure_cell_count;
+            u32 source_cell_index;
+            bool sustain_gate_ok;
+            bool attack_gate_ok;
+            bool harmonic_gate_ok;
+            bool stability_gate_ok;
+
+            if (suite_count >= ARRAY_COUNT(stage6_suite_results))
+            {
+                break;
+            }
+
+            semitone_offset = STAGE6_SEMITONE_OFFSETS[note_index];
+            note_ratio = (f64) semitone_offset / 12.0;
+            pressure_cell_count = STAGE6_NOTE_CELL_COUNTS[note_index];
+            source_cell_index =
+                (u32) ((f64) pressure_cell_count * STAGE6_SOURCE_RATIOS[note_index] + 0.5);
+            if (source_cell_index >= pressure_cell_count)
+            {
+                source_cell_index = pressure_cell_count - 1;
+            }
+
+            suite_settings = settings;
+            suite_settings.run_stage6_suite = false;
+            suite_settings.run_speech_analysis = true;
+            suite_settings.preset = VERIFICATION_PRESET_OPEN_RIGID;
+            suite_settings.excitation_type = VERIFICATION_EXCITATION_TYPE_JET_LABIUM;
+            suite_settings.probe_type = FDTD_1D_PROBE_TYPE_PRESSURE;
+            if (suite_settings.block_count < 512)
+            {
+                suite_settings.block_count = 512;
+            }
+            suite_settings.source_index_was_overridden = true;
+            suite_settings.source_cell_index = source_cell_index;
+            suite_settings.pressure_cell_count = pressure_cell_count;
+            suite_settings.uniform_loss *= (1.0 - (0.10 * note_ratio));
+            suite_settings.uniform_high_frequency_loss *= (1.0 - (0.25 * note_ratio));
+            suite_settings.uniform_boundary_high_frequency_loss *= (1.0 - (0.35 * note_ratio));
+            suite_settings.nonlinear_mouth_parameters.max_output =
+                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.max_output * (1.0 + (0.35 * note_ratio)));
+            suite_settings.nonlinear_mouth_parameters.noise_scale =
+                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.noise_scale * (1.0 + (0.50 * note_ratio)));
+            suite_settings.nonlinear_mouth_parameters.pressure_feedback =
+                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.pressure_feedback * (1.0 + (0.20 * note_ratio)));
+            suite_settings.nonlinear_mouth_parameters.velocity_feedback =
+                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.velocity_feedback * (1.0 + (0.20 * note_ratio)));
+            suite_settings.nonlinear_mouth_parameters.drive_limit =
+                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.drive_limit * (1.0 + (0.35 * note_ratio)));
+
+            if (RunVerification(&suite_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
+            {
+                return 1;
+            }
+
+            sustain_gate_ok = EvaluateVoicingSustainGate(summary.sustained.late_to_early_rms_ratio);
+            attack_gate_ok = EvaluateVoicingAttackGate(summary.speech.attack_was_found, summary.speech.attack_10_to_90_ms);
+            harmonic_gate_ok = EvaluateVoicingHarmonicBalanceGate(
+                summary.sustained.late_harmonic_energy_ratio,
+                summary.sustained.harmonic_decay_slope_db_per_harmonic
+            );
+            stability_gate_ok =
+                EvaluateDominantFrequencyDriftGate(summary.sustained.dominant_frequency_drift_ratio) &&
+                EvaluateEnergyDriftGate(summary.energy.final_energy - summary.energy.initial_energy);
+
+            suite_result = &stage6_suite_results[suite_count];
+            suite_result->note_index = note_index;
+            suite_result->semitone_offset = semitone_offset;
+            suite_result->pressure_cell_count = pressure_cell_count;
+            suite_result->source_cell_index = source_cell_index;
+            suite_result->measured_f0_hz = summary.mode_results[0].measured_peak_frequency_hz;
+            suite_result->expected_ratio_from_base = 0.0;
+            suite_result->measured_ratio_from_base = 0.0;
+            suite_result->ratio_error_percent = 0.0;
+            suite_result->sustain_gate_ok = sustain_gate_ok;
+            suite_result->attack_gate_ok = attack_gate_ok;
+            suite_result->harmonic_gate_ok = harmonic_gate_ok;
+            suite_result->stability_gate_ok = stability_gate_ok;
+            suite_result->overall_voicing_gate_ok =
+                sustain_gate_ok &&
+                attack_gate_ok &&
+                harmonic_gate_ok &&
+                stability_gate_ok;
+
+            if ((note_index == 0) && (suite_result->measured_f0_hz > 0.0))
+            {
+                base_f0_hz = suite_result->measured_f0_hz;
+                has_base_f0 = true;
+            }
+
+            suite_count += 1;
+            if (suite_result->overall_voicing_gate_ok)
+            {
+                voicing_pass_count += 1;
+            }
+
+            free(capture.samples);
+            capture.samples = NULL;
+        }
+
+        if (has_base_f0)
+        {
+            for (note_index = 0; note_index < suite_count; note_index += 1)
+            {
+                Stage6SuiteNoteResult *suite_result;
+                f64 expected_ratio;
+                f64 measured_ratio;
+
+                suite_result = &stage6_suite_results[note_index];
+                expected_ratio = pow(2.0, (f64) suite_result->semitone_offset / 12.0);
+                measured_ratio = suite_result->measured_f0_hz / base_f0_hz;
+                suite_result->expected_ratio_from_base = expected_ratio;
+                suite_result->measured_ratio_from_base = measured_ratio;
+                suite_result->ratio_error_percent =
+                    100.0 * (measured_ratio - expected_ratio) / expected_ratio;
+                if (EvaluateStage6RatioGate(suite_result->ratio_error_percent))
+                {
+                    ratio_pass_count += 1;
+                }
+            }
+        }
+
+        printf("FDTD 1D Stage 6 Suite\n\n");
+        printf("Setup\n");
+        printf("  preset_family:          open-rigid\n");
+        printf("  excitation:             jet-labium\n");
+        printf("  block_count:            %u\n", settings.block_count < 512 ? 512 : settings.block_count);
+        printf("  notes_tested:           %u\n", suite_count);
+        printf("  semitone_offsets:       0,2,4,5,7,9,11,12\n");
+        printf("\n");
+        printf("Voicing Targets\n");
+        printf("  sustain_ratio:          [0.30, 1.40]\n");
+        printf("  attack_10_to_90_ms:     [5.0, 300.0]\n");
+        printf("  harmonic_ratio:         [0.02, 0.50]\n");
+        printf("  harmonic_slope_db:      [-10.0, 2.0]\n");
+        printf("  ratio_error_percent:    <= 3.0\n");
+        printf("\n");
+        printf("Per-Note Results\n");
+        printf("  note  semis  cells  source  f0_hz    ratio_err%%  sustain  attack  harmonic  stability  voicing\n");
+        for (note_index = 0; note_index < suite_count; note_index += 1)
+        {
+            Stage6SuiteNoteResult *suite_result;
+
+            suite_result = &stage6_suite_results[note_index];
+            printf(
+                "  %-5u %-6u %-6u %-7u %-8.2f %-11.3f %-8s %-7s %-9s %-10s %s\n",
+                suite_result->note_index,
+                suite_result->semitone_offset,
+                suite_result->pressure_cell_count,
+                suite_result->source_cell_index,
+                suite_result->measured_f0_hz,
+                suite_result->ratio_error_percent,
+                suite_result->sustain_gate_ok ? "pass" : "warn",
+                suite_result->attack_gate_ok ? "pass" : "warn",
+                suite_result->harmonic_gate_ok ? "pass" : "warn",
+                suite_result->stability_gate_ok ? "pass" : "warn",
+                suite_result->overall_voicing_gate_ok ? "pass" : "warn"
+            );
+        }
+        printf("\n");
+        printf("Stage 6 Summary\n");
+        printf("  voicing_pass_count:     %u / %u\n", voicing_pass_count, suite_count);
+        printf("  ratio_pass_count:       %u / %u\n", ratio_pass_count, suite_count);
+        printf("  stage6_rank_gate:       %s\n",
+            ((voicing_pass_count == suite_count) && (ratio_pass_count == suite_count)) ? "pass" : "warn"
+        );
+        printf("\n");
 
         return 0;
     }

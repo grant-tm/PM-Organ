@@ -52,6 +52,12 @@ typedef enum AppSourceCouplingMode
     APP_SOURCE_COUPLING_MODE_COUNT,
 } AppSourceCouplingMode;
 
+typedef struct NoteEvent
+{
+    u32 note_index;
+    bool is_down;
+} NoteEvent;
+
 typedef struct AppState
 {
     AudioDevice audio_device;
@@ -82,17 +88,57 @@ typedef struct AppState
     bool previous_toggle_is_down;
     bool previous_cycle_is_down;
     bool rank_note_is_down[8];
-    bool previous_rank_note_is_down[8];
+    bool previous_rank_key_is_down[8];
+    NoteEvent note_event_queue[64];
+    u32 note_event_queue_read_index;
+    u32 note_event_queue_write_index;
+    u32 note_event_queue_count;
 } AppState;
 
 enum
 {
     RANK_NOTE_COUNT = 8,
+    NOTE_EVENT_QUEUE_CAPACITY = 64,
 };
 
 static const u32 RANK_NOTE_SEMITONE_OFFSETS[RANK_NOTE_COUNT] =
 {
     0, 2, 4, 5, 7, 9, 11, 12,
+};
+
+typedef struct RankNoteBinding
+{
+    i32 key_code;
+    u32 note_index;
+} RankNoteBinding;
+
+static const RankNoteBinding RANK_NOTE_BINDINGS[RANK_NOTE_COUNT] =
+{
+    { 'A', 0 },
+    { 'S', 1 },
+    { 'D', 2 },
+    { 'F', 3 },
+    { 'G', 4 },
+    { 'H', 5 },
+    { 'J', 6 },
+    { 'K', 7 },
+};
+
+static const f64 RANK_NOTE_SOURCE_RATIOS[RANK_NOTE_COUNT] =
+{
+    28.0 / 128.0,
+    29.0 / 128.0,
+    30.0 / 128.0,
+    31.0 / 128.0,
+    32.0 / 128.0,
+    34.0 / 128.0,
+    36.0 / 128.0,
+    38.0 / 128.0,
+};
+
+static const u32 RANK_NOTE_CELL_COUNTS[RANK_NOTE_COUNT] =
+{
+    38, 34, 30, 29, 25, 23, 20, 19
 };
 
 static Fdtd1DOutputExtractionMode ToRenderSourceOutputExtractionMode (AppOutputExtractionMode app_mode)
@@ -364,16 +410,6 @@ static void BuildFdtdPresetDesc (
         (*area_segment_count > 0) ? area_segment_descs : NULL;
 }
 
-static u32 RoundToMultipleU32 (u32 value, u32 multiple)
-{
-    if (multiple == 0)
-    {
-        return value;
-    }
-
-    return ((value + multiple - 1) / multiple) * multiple;
-}
-
 static void BuildRankVoiceDesc (
     u32 rank_note_index,
     const AudioEngineDesc *engine_desc,
@@ -382,14 +418,11 @@ static void BuildRankVoiceDesc (
     Fdtd1DSourceDesc *source_descs
 )
 {
-    static const u32 BASE_PRESSURE_CELL_COUNT = 128;
-    static const f64 SOURCE_RATIO = 28.0 / 128.0;
     static const f64 LEFT_PROBE_RATIO = 72.0 / 128.0;
     static const f64 RIGHT_PROBE_RATIO = 104.0 / 128.0;
     static const f64 TEST_COURANT_NUMBER = 0.9;
-    static const u32 CELL_ALIGNMENT = 8;
     f64 dx;
-    f64 length_ratio;
+    f64 note_ratio;
     u32 pressure_cell_count;
     u32 source_cell_index;
     u32 left_probe_index;
@@ -413,16 +446,11 @@ static void BuildRankVoiceDesc (
         &area_segment_count
     );
 
-    length_ratio = pow(2.0, -(f64) RANK_NOTE_SEMITONE_OFFSETS[rank_note_index] / 12.0);
-    pressure_cell_count = (u32) ((f64) BASE_PRESSURE_CELL_COUNT * length_ratio + 0.5);
-    pressure_cell_count = RoundToMultipleU32(pressure_cell_count, CELL_ALIGNMENT);
-    if (pressure_cell_count < 48)
-    {
-        pressure_cell_count = 48;
-    }
+    note_ratio = (f64) RANK_NOTE_SEMITONE_OFFSETS[rank_note_index] / 12.0;
+    pressure_cell_count = RANK_NOTE_CELL_COUNTS[rank_note_index];
 
     dx = 343.0 / (TEST_COURANT_NUMBER * (f64) engine_desc->sample_rate);
-    source_cell_index = (u32) ((f64) pressure_cell_count * SOURCE_RATIO + 0.5);
+    source_cell_index = (u32) ((f64) pressure_cell_count * RANK_NOTE_SOURCE_RATIOS[rank_note_index] + 0.5);
     left_probe_index = (u32) ((f64) pressure_cell_count * LEFT_PROBE_RATIO + 0.5);
     right_probe_index = (u32) ((f64) pressure_cell_count * RIGHT_PROBE_RATIO + 0.5);
 
@@ -459,6 +487,10 @@ static void BuildRankVoiceDesc (
 
     source_descs[0].cell_index = source_cell_index;
     render_source_desc->startup_impulse_target_index = 0;
+
+    render_source_desc->solver_desc.uniform_loss *= (1.0 - (0.10 * note_ratio));
+    render_source_desc->solver_desc.uniform_high_frequency_loss *= (1.0 - (0.25 * note_ratio));
+    render_source_desc->solver_desc.uniform_boundary_high_frequency_loss *= (1.0 - (0.35 * note_ratio));
 }
 
 static bool AnyRankNoteIsDown (const AppState *app)
@@ -476,6 +508,68 @@ static bool AnyRankNoteIsDown (const AppState *app)
     }
 
     return false;
+}
+
+static bool QueueNoteEvent (AppState *app, u32 note_index, bool is_down)
+{
+    NoteEvent event;
+
+    ASSERT(app != NULL);
+    ASSERT(note_index < RANK_NOTE_COUNT);
+
+    if (app->note_event_queue_count >= NOTE_EVENT_QUEUE_CAPACITY)
+    {
+        return false;
+    }
+
+    event.note_index = note_index;
+    event.is_down = is_down;
+    app->note_event_queue[app->note_event_queue_write_index] = event;
+    app->note_event_queue_write_index =
+        (app->note_event_queue_write_index + 1) % NOTE_EVENT_QUEUE_CAPACITY;
+    app->note_event_queue_count += 1;
+
+    return true;
+}
+
+static void SetRankNoteState (AppState *app, u32 note_index, bool is_down)
+{
+    bool was_down;
+
+    ASSERT(app != NULL);
+    ASSERT(note_index < RANK_NOTE_COUNT);
+
+    was_down = app->rank_note_is_down[note_index];
+    if (is_down == was_down)
+    {
+        return;
+    }
+
+    app->rank_note_is_down[note_index] = is_down;
+    if (is_down)
+    {
+        Fdtd1DRenderSource_RestartSpeech(&app->rank_render_sources[note_index]);
+        if (app->active_excitation_mode == APP_EXCITATION_MODE_IMPULSE)
+        {
+            Fdtd1DRenderSource_TriggerStartupImpulse(&app->rank_render_sources[note_index]);
+        }
+    }
+}
+
+static void ProcessNoteEvents (AppState *app)
+{
+    ASSERT(app != NULL);
+
+    while (app->note_event_queue_count > 0)
+    {
+        NoteEvent event;
+
+        event = app->note_event_queue[app->note_event_queue_read_index];
+        app->note_event_queue_read_index =
+            (app->note_event_queue_read_index + 1) % NOTE_EVENT_QUEUE_CAPACITY;
+        app->note_event_queue_count -= 1;
+        SetRankNoteState(app, event.note_index, event.is_down);
+    }
 }
 
 static void RenderRankVoices (
@@ -1001,10 +1095,6 @@ static void SetListenerLowpassCutoff (AppState *app, f32 listener_lowpass_cutoff
 
 static void UpdateDebugInput (AppState *app)
 {
-    static const i32 RANK_NOTE_KEYS[RANK_NOTE_COUNT] =
-    {
-        'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K'
-    };
     bool cycle_is_down;
     u32 note_index;
     bool space_is_down;
@@ -1028,19 +1118,16 @@ static void UpdateDebugInput (AppState *app)
 
     for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
     {
+        bool previous_key_is_down;
         bool note_is_down;
 
-        note_is_down = (GetAsyncKeyState(RANK_NOTE_KEYS[note_index]) & 0x8000) != 0;
-        app->rank_note_is_down[note_index] = note_is_down;
-        if (note_is_down && (app->previous_rank_note_is_down[note_index] == false))
+        note_is_down = (GetAsyncKeyState(RANK_NOTE_BINDINGS[note_index].key_code) & 0x8000) != 0;
+        previous_key_is_down = app->previous_rank_key_is_down[RANK_NOTE_BINDINGS[note_index].note_index];
+        if (note_is_down != previous_key_is_down)
         {
-            Fdtd1DRenderSource_RestartSpeech(&app->rank_render_sources[note_index]);
-            if (app->active_excitation_mode == APP_EXCITATION_MODE_IMPULSE)
-            {
-                Fdtd1DRenderSource_TriggerStartupImpulse(&app->rank_render_sources[note_index]);
-            }
+            QueueNoteEvent(app, RANK_NOTE_BINDINGS[note_index].note_index, note_is_down);
+            app->previous_rank_key_is_down[RANK_NOTE_BINDINGS[note_index].note_index] = note_is_down;
         }
-        app->previous_rank_note_is_down[note_index] = note_is_down;
     }
 
     app->previous_space_is_down = space_is_down;
@@ -1229,7 +1316,10 @@ int App_Run (void)
     app->previous_toggle_is_down = false;
     app->previous_cycle_is_down = false;
     memset(app->rank_note_is_down, 0, sizeof(app->rank_note_is_down));
-    memset(app->previous_rank_note_is_down, 0, sizeof(app->previous_rank_note_is_down));
+    memset(app->previous_rank_key_is_down, 0, sizeof(app->previous_rank_key_is_down));
+    app->note_event_queue_read_index = 0;
+    app->note_event_queue_write_index = 0;
+    app->note_event_queue_count = 0;
     app->active_fdtd_preset = FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED;
     app->active_excitation_mode = APP_EXCITATION_MODE_IMPULSE;
     app->active_source_coupling_mode = APP_SOURCE_COUPLING_MODE_PRESSURE;
@@ -1297,6 +1387,7 @@ int App_Run (void)
         FrameTimer_BeginFrame(&app->frame_timer);
         PlatformWindow_PumpMessages(&app->main_window);
         UpdateDebugInput(app);
+        ProcessNoteEvents(app);
 
         for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
         {
