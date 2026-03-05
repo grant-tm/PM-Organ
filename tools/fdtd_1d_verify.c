@@ -169,6 +169,12 @@ typedef struct VerificationRunSummary
     SpeechAnalysisResult speech;
     EnergyResult energy;
     SimulationStats stats;
+    f64 left_boundary_emission_rms;
+    f64 right_boundary_emission_rms;
+    f64 left_boundary_emission_peak_abs;
+    f64 right_boundary_emission_peak_abs;
+    bool left_boundary_emission_activity_ok;
+    bool right_boundary_emission_activity_ok;
     u32 pressure_cell_count;
     f64 tube_length_m;
 } VerificationRunSummary;
@@ -208,6 +214,8 @@ static const char *GetProbeTypeName (Fdtd1DProbeType probe_type)
     {
         case FDTD_1D_PROBE_TYPE_PRESSURE: return "pressure";
         case FDTD_1D_PROBE_TYPE_VELOCITY: return "velocity";
+        case FDTD_1D_PROBE_TYPE_LEFT_BOUNDARY_EMISSION: return "left-boundary-emission";
+        case FDTD_1D_PROBE_TYPE_RIGHT_BOUNDARY_EMISSION: return "right-boundary-emission";
     }
 
     ASSERT(false);
@@ -333,6 +341,19 @@ static bool EvaluateEnergyDriftGate (f64 energy_drift)
 {
     static const f64 MAX_ABS_ENERGY_DRIFT = 1.0;
     return fabs(energy_drift) <= MAX_ABS_ENERGY_DRIFT;
+}
+
+static bool EvaluateBoundaryEmissionActivityGate (Fdtd1DBoundaryType boundary_type, f64 emission_rms)
+{
+    static const f64 OPEN_BOUNDARY_MIN_RMS = 1.0e-6;
+    static const f64 NON_OPEN_BOUNDARY_MAX_RMS = 1.0e-6;
+
+    if (boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
+    {
+        return emission_rms >= OPEN_BOUNDARY_MIN_RMS;
+    }
+
+    return emission_rms <= NON_OPEN_BOUNDARY_MAX_RMS;
 }
 
 static bool EvaluateSpeechOnsetToPeakGate (f64 onset_to_peak_ms)
@@ -555,6 +576,18 @@ static bool TryParseProbeTypeName (const char *text, Fdtd1DProbeType *probe_type
         return true;
     }
 
+    if ((_stricmp(text, "left-boundary-emission") == 0) || (_stricmp(text, "left-emission") == 0))
+    {
+        *probe_type = FDTD_1D_PROBE_TYPE_LEFT_BOUNDARY_EMISSION;
+        return true;
+    }
+
+    if ((_stricmp(text, "right-boundary-emission") == 0) || (_stricmp(text, "right-emission") == 0))
+    {
+        *probe_type = FDTD_1D_PROBE_TYPE_RIGHT_BOUNDARY_EMISSION;
+        return true;
+    }
+
     return false;
 }
 
@@ -733,6 +766,14 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         if (TryParseProbeTypeName(argument, &settings->probe_type))
         {
             continue;
+        }
+
+        if (_strnicmp(argument, "probe=", 6) == 0)
+        {
+            if (TryParseProbeTypeName(argument + 6, &settings->probe_type))
+            {
+                continue;
+            }
         }
 
         if (TryParseExcitationTypeName(argument, &settings->excitation_type))
@@ -2337,6 +2378,30 @@ static bool RunVerification (
     AnalyzeSustainedBehavior(capture, solver_desc, 0, &summary->sustained);
     AnalyzeSpeechBehavior(capture, solver_desc, 0, &summary->speech);
 
+    state = Fdtd1D_GetState(&solver);
+    if ((state != NULL) && (state->boundary_emission_sample_count > 0))
+    {
+        f64 inverse_sample_count;
+
+        inverse_sample_count = 1.0 / (f64) state->boundary_emission_sample_count;
+        summary->left_boundary_emission_rms = sqrt(
+            state->left_boundary_emission_sum_squares * inverse_sample_count
+        );
+        summary->right_boundary_emission_rms = sqrt(
+            state->right_boundary_emission_sum_squares * inverse_sample_count
+        );
+        summary->left_boundary_emission_peak_abs = state->left_boundary_emission_peak_abs;
+        summary->right_boundary_emission_peak_abs = state->right_boundary_emission_peak_abs;
+        summary->left_boundary_emission_activity_ok = EvaluateBoundaryEmissionActivityGate(
+            solver_desc->left_boundary.type,
+            summary->left_boundary_emission_rms
+        );
+        summary->right_boundary_emission_activity_ok = EvaluateBoundaryEmissionActivityGate(
+            solver_desc->right_boundary.type,
+            summary->right_boundary_emission_rms
+        );
+    }
+
     summary->stats = *Simulation_GetStats(simulation);
     summary->pressure_cell_count = solver_desc->pressure_cell_count;
     summary->tube_length_m = solver_desc->tube_length_m;
@@ -2819,6 +2884,27 @@ int main (int argc, char **argv)
     );
     printf("  saw Inf:                %s\n",
         summary.stats.saw_inf ? "yes" : "no"
+    );
+    printf("\n");
+
+    printf("Boundary Emission\n");
+    printf("  left rms:               %.9f\n",
+        summary.left_boundary_emission_rms
+    );
+    printf("  left peak abs:          %.9f\n",
+        summary.left_boundary_emission_peak_abs
+    );
+    printf("  left activity gate:     %s\n",
+        summary.left_boundary_emission_activity_ok ? "pass" : "warn"
+    );
+    printf("  right rms:              %.9f\n",
+        summary.right_boundary_emission_rms
+    );
+    printf("  right peak abs:         %.9f\n",
+        summary.right_boundary_emission_peak_abs
+    );
+    printf("  right activity gate:    %s\n",
+        summary.right_boundary_emission_activity_ok ? "pass" : "warn"
     );
     printf("\n");
 

@@ -12,6 +12,8 @@ enum
     RENDER_SOURCE_PROBE_INDEX_LEFT_MOUTH_VELOCITY,
     RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_PRESSURE,
     RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_VELOCITY,
+    RENDER_SOURCE_PROBE_INDEX_LEFT_BOUNDARY_EMISSION,
+    RENDER_SOURCE_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION,
 };
 
 static const f64 DRIVE_SMOOTHING_SECONDS = 0.05;
@@ -649,24 +651,18 @@ void Fdtd1DRenderSource_Render (
 
         case FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION:
         {
-            f32 characteristic_impedance;
             bool left_is_open;
             bool right_is_open;
 
             ASSERT(simulation->probe_buffer != NULL);
-            ASSERT(simulation->config.probe_count >= 6);
+            ASSERT(simulation->config.probe_count >= 8);
 
-            characteristic_impedance = (f32) state->characteristic_impedance;
             left_is_open = (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN);
             right_is_open = (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN);
 
             for (frame_index = 0; frame_index < block_frame_count; frame_index += 1)
             {
-                f32 left_mouth_pressure;
-                f32 left_mouth_velocity;
                 f32 left_outgoing_wave;
-                f32 right_mouth_pressure;
-                f32 right_mouth_velocity;
                 f32 right_outgoing_wave;
                 usize output_offset;
                 usize probe_offset;
@@ -674,16 +670,11 @@ void Fdtd1DRenderSource_Render (
                 probe_offset = frame_index * (usize) simulation->config.probe_count;
                 output_offset = frame_index * (usize) channel_count;
 
-                left_mouth_pressure = simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_LEFT_MOUTH_PRESSURE];
-                left_mouth_velocity = simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_LEFT_MOUTH_VELOCITY];
-                right_mouth_pressure = simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_PRESSURE];
-                right_mouth_velocity = simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_VELOCITY];
-
                 left_outgoing_wave = left_is_open ?
-                    0.5f * (left_mouth_pressure - characteristic_impedance * left_mouth_velocity) :
+                    simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_LEFT_BOUNDARY_EMISSION] :
                     0.0f;
                 right_outgoing_wave = right_is_open ?
-                    0.5f * (right_mouth_pressure + characteristic_impedance * right_mouth_velocity) :
+                    simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION] :
                     0.0f;
 
                 if (left_is_open && right_is_open)

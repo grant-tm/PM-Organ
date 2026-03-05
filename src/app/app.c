@@ -237,6 +237,16 @@ static void BuildFdtdPresetDesc (
     probe_descs[5].output_channel_index = 1;
     probe_descs[5].is_enabled = true;
 
+    probe_descs[6].type = FDTD_1D_PROBE_TYPE_LEFT_BOUNDARY_EMISSION;
+    probe_descs[6].cell_index = 0;
+    probe_descs[6].output_channel_index = 0;
+    probe_descs[6].is_enabled = true;
+
+    probe_descs[7].type = FDTD_1D_PROBE_TYPE_RIGHT_BOUNDARY_EMISSION;
+    probe_descs[7].cell_index = 0;
+    probe_descs[7].output_channel_index = 1;
+    probe_descs[7].is_enabled = true;
+
     source_descs[0].cell_index = 6;
     source_descs[0].is_enabled = true;
 
@@ -264,7 +274,7 @@ static void BuildFdtdPresetDesc (
     render_source_desc->solver_desc.left_boundary.reflection_coefficient = -1.0;
     render_source_desc->solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
     render_source_desc->solver_desc.right_boundary.reflection_coefficient = 1.0;
-    render_source_desc->solver_desc.probe_count = 6;
+    render_source_desc->solver_desc.probe_count = 8;
     render_source_desc->solver_desc.probe_descs = probe_descs;
     render_source_desc->solver_desc.source_count = 1;
     render_source_desc->solver_desc.source_descs = source_descs;
@@ -664,7 +674,7 @@ int App_Run (void)
     for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
     {
         Fdtd1DAreaSegmentDesc area_segment_descs[2];
-        Fdtd1DProbeDesc probe_descs[6];
+        Fdtd1DProbeDesc probe_descs[8];
         Fdtd1DRenderSourceDesc fdtd_render_source_desc;
         Fdtd1DSourceDesc source_descs[1];
         u32 area_segment_count;

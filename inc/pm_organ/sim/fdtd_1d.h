@@ -22,6 +22,8 @@ typedef enum Fdtd1DProbeType
 {
     FDTD_1D_PROBE_TYPE_PRESSURE = 0,
     FDTD_1D_PROBE_TYPE_VELOCITY,
+    FDTD_1D_PROBE_TYPE_LEFT_BOUNDARY_EMISSION,
+    FDTD_1D_PROBE_TYPE_RIGHT_BOUNDARY_EMISSION,
 } Fdtd1DProbeType;
 
 typedef struct Fdtd1DProbeDesc
@@ -168,6 +170,17 @@ typedef struct Fdtd1DState
     f32 left_previous_incoming_pressure;
     f32 right_previous_outgoing_pressure;
     f32 right_previous_incoming_pressure;
+    f32 left_boundary_outgoing_wave;
+    f32 left_boundary_incoming_wave;
+    f32 right_boundary_outgoing_wave;
+    f32 right_boundary_incoming_wave;
+    f32 left_boundary_emitted_sample;
+    f32 right_boundary_emitted_sample;
+    f64 left_boundary_emission_sum_squares;
+    f64 right_boundary_emission_sum_squares;
+    f32 left_boundary_emission_peak_abs;
+    f32 right_boundary_emission_peak_abs;
+    u64 boundary_emission_sample_count;
     u32 noise_state;
 } Fdtd1DState;
 

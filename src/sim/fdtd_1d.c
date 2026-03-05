@@ -143,6 +143,12 @@ static bool ValidateProbeDescs (const Fdtd1DDesc *desc)
                 }
             } break;
 
+            case FDTD_1D_PROBE_TYPE_LEFT_BOUNDARY_EMISSION:
+            case FDTD_1D_PROBE_TYPE_RIGHT_BOUNDARY_EMISSION:
+            {
+                /* Boundary emission probes are virtual readouts and ignore cell index. */
+            } break;
+
             default:
             {
                 return false;
@@ -265,6 +271,17 @@ static void ResetStateCallback (Simulation *simulation)
     state->left_previous_incoming_pressure = 0.0f;
     state->right_previous_outgoing_pressure = 0.0f;
     state->right_previous_incoming_pressure = 0.0f;
+    state->left_boundary_outgoing_wave = 0.0f;
+    state->left_boundary_incoming_wave = 0.0f;
+    state->right_boundary_outgoing_wave = 0.0f;
+    state->right_boundary_incoming_wave = 0.0f;
+    state->left_boundary_emitted_sample = 0.0f;
+    state->right_boundary_emitted_sample = 0.0f;
+    state->left_boundary_emission_sum_squares = 0.0;
+    state->right_boundary_emission_sum_squares = 0.0;
+    state->left_boundary_emission_peak_abs = 0.0f;
+    state->right_boundary_emission_peak_abs = 0.0f;
+    state->boundary_emission_sample_count = 0;
     state->noise_state = 0x13572468u;
 
     if ((state->mouth_feedback_delay_buffer != NULL) && (state->source_count > 0))
@@ -296,6 +313,11 @@ static f32 ClampF32 (f32 value, f32 min_value, f32 max_value)
     }
 
     return value;
+}
+
+static f32 AbsF32 (f32 value)
+{
+    return (value < 0.0f) ? -value : value;
 }
 
 static f32 ApplyFrequencyDependentLoss (
@@ -716,6 +738,32 @@ static f32 FilterOpenBoundaryReflection (
     return incoming_pressure;
 }
 
+static f32 ComputeBoundaryEmittedSample (
+    Fdtd1DBoundaryType boundary_type,
+    f32 outgoing_wave,
+    f32 incoming_wave
+)
+{
+    switch (boundary_type)
+    {
+        case FDTD_1D_BOUNDARY_TYPE_OPEN:
+        {
+            /* Radiated observation is derived from outgoing wave only. */
+            return outgoing_wave;
+        }
+
+        case FDTD_1D_BOUNDARY_TYPE_RIGID:
+        case FDTD_1D_BOUNDARY_TYPE_REFLECTION_COEFFICIENT:
+        {
+            (void) incoming_wave;
+            return 0.0f;
+        }
+    }
+
+    ASSERT(false);
+    return 0.0f;
+}
+
 static void InitializeAreaFields (Fdtd1DState *state, const Fdtd1DDesc *desc)
 {
     u32 cell_index;
@@ -921,6 +969,9 @@ static void UpdateVelocityField (Fdtd1DState *state)
         {
             state->velocity[0] = 0.0f;
             state->velocity_previous[0] = 0.0f;
+            state->left_boundary_outgoing_wave = 0.0f;
+            state->left_boundary_incoming_wave = 0.0f;
+            state->left_boundary_emitted_sample = 0.0f;
         } break;
 
         case FDTD_1D_BOUNDARY_TYPE_OPEN:
@@ -946,6 +997,13 @@ static void UpdateVelocityField (Fdtd1DState *state)
                 incoming_pressure = state->left_reflection_coefficient * outgoing_pressure;
             }
 
+            state->left_boundary_outgoing_wave = outgoing_pressure;
+            state->left_boundary_incoming_wave = incoming_pressure;
+            state->left_boundary_emitted_sample = ComputeBoundaryEmittedSample(
+                state->left_boundary_type,
+                outgoing_pressure,
+                incoming_pressure
+            );
             state->velocity[0] = (incoming_pressure - outgoing_pressure) / characteristic_impedance;
             state->velocity[0] *= (1.0f - state->boundary_loss);
             state->velocity[0] = ApplyFrequencyDependentLoss(
@@ -962,6 +1020,9 @@ static void UpdateVelocityField (Fdtd1DState *state)
         {
             state->velocity[state->velocity_cell_count - 1] = 0.0f;
             state->velocity_previous[state->velocity_cell_count - 1] = 0.0f;
+            state->right_boundary_outgoing_wave = 0.0f;
+            state->right_boundary_incoming_wave = 0.0f;
+            state->right_boundary_emitted_sample = 0.0f;
         } break;
 
         case FDTD_1D_BOUNDARY_TYPE_OPEN:
@@ -990,6 +1051,13 @@ static void UpdateVelocityField (Fdtd1DState *state)
                 incoming_pressure = state->right_reflection_coefficient * outgoing_pressure;
             }
 
+            state->right_boundary_outgoing_wave = outgoing_pressure;
+            state->right_boundary_incoming_wave = incoming_pressure;
+            state->right_boundary_emitted_sample = ComputeBoundaryEmittedSample(
+                state->right_boundary_type,
+                outgoing_pressure,
+                incoming_pressure
+            );
             state->velocity[state->velocity_cell_count - 1] =
                 (outgoing_pressure - incoming_pressure) / characteristic_impedance;
             state->velocity[state->velocity_cell_count - 1] *=
@@ -1000,6 +1068,31 @@ static void UpdateVelocityField (Fdtd1DState *state)
                 state->boundary_high_frequency_loss
             );
         } break;
+    }
+
+    {
+        f32 left_abs;
+        f32 right_abs;
+
+        left_abs = AbsF32(state->left_boundary_emitted_sample);
+        right_abs = AbsF32(state->right_boundary_emitted_sample);
+
+        state->left_boundary_emission_sum_squares +=
+            (f64) state->left_boundary_emitted_sample * (f64) state->left_boundary_emitted_sample;
+        state->right_boundary_emission_sum_squares +=
+            (f64) state->right_boundary_emitted_sample * (f64) state->right_boundary_emitted_sample;
+
+        if (left_abs > state->left_boundary_emission_peak_abs)
+        {
+            state->left_boundary_emission_peak_abs = left_abs;
+        }
+
+        if (right_abs > state->right_boundary_emission_peak_abs)
+        {
+            state->right_boundary_emission_peak_abs = right_abs;
+        }
+
+        state->boundary_emission_sample_count += 1;
     }
 }
 
@@ -1187,6 +1280,16 @@ static void ReadProbes (SimulationProcessContext *process_context, const Fdtd1DS
             case FDTD_1D_PROBE_TYPE_VELOCITY:
             {
                 sample_value = state->velocity[cell_index];
+            } break;
+
+            case FDTD_1D_PROBE_TYPE_LEFT_BOUNDARY_EMISSION:
+            {
+                sample_value = state->left_boundary_emitted_sample;
+            } break;
+
+            case FDTD_1D_PROBE_TYPE_RIGHT_BOUNDARY_EMISSION:
+            {
+                sample_value = state->right_boundary_emitted_sample;
             } break;
 
             default:
