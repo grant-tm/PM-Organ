@@ -305,6 +305,7 @@ static void BuildFdtdPresetDesc (
             area_segment_descs[1].end_cell_index = 128;
             area_segment_descs[1].area_m2 = 0.012;
             *area_segment_count = 2;
+            source_descs[0].cell_index = 16;
             render_source_desc->solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
             render_source_desc->solver_desc.right_boundary.reflection_coefficient = -1.0;
         } break;

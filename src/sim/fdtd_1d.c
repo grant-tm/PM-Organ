@@ -23,11 +23,11 @@ static const Fdtd1DNonlinearMouthParameters DEFAULT_NONLINEAR_MOUTH_PARAMETERS =
 static const Fdtd1DJetLabiumParameters DEFAULT_JET_LABIUM_PARAMETERS =
 {
     0.0020f,  /* max_output */
-    0.22f,    /* noise_scale */
-    0.20f,    /* pressure_feedback */
-    0.06f,    /* velocity_feedback */
+    0.15f,    /* noise_scale */
+    0.16f,    /* pressure_feedback */
+    0.05f,    /* velocity_feedback */
     0.35f,    /* feedback_leak */
-    0.25f,    /* jet_smoothing */
+    0.30f,    /* jet_smoothing */
     1.9f,     /* labium_split_gain */
     12.0f,    /* saturation_gain */
     0.0022f,  /* drive_limit */
@@ -512,7 +512,7 @@ static f32 ComputeJetLabiumExcitation (
 )
 {
     static const u32 MIN_CONVECTION_DELAY_SAMPLES = 2;
-    static const f32 JET_LABIUM_BACKPRESSURE_COUPLING = 0.45f;
+    static const f32 JET_LABIUM_BACKPRESSURE_COUPLING = 0.35f;
     static const f32 JET_LABIUM_BACKPRESSURE_LIMIT_SCALE = 6.0f;
     f32 delayed_feedback;
     f32 backpressure_term;

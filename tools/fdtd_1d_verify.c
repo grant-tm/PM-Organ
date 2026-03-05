@@ -74,12 +74,36 @@ typedef struct SustainedAnalysisResult
     f64 late_dominant_frequency_a_hz;
     f64 late_dominant_frequency_b_hz;
     f64 dominant_frequency_drift_hz;
+    f64 dominant_frequency_drift_ratio;
     f64 late_to_early_rms_ratio;
     f64 late_spectral_centroid_hz;
     f64 late_spectral_flatness;
     f64 late_harmonic_energy_ratio;
     f64 late_spectral_flux;
 } SustainedAnalysisResult;
+
+typedef struct SpeechAnalysisResult
+{
+    u32 onset_frame;
+    u32 peak_frame;
+    u32 attack_10_frame;
+    u32 attack_90_frame;
+    u32 chiff_start_frame;
+    u32 chiff_end_frame;
+    u32 sustain_start_frame;
+    u32 sustain_end_frame;
+    u32 settle_frame;
+    f64 peak_abs;
+    f64 onset_to_peak_ms;
+    f64 attack_10_to_90_ms;
+    f64 chiff_rms;
+    f64 sustain_rms;
+    f64 chiff_to_sustain_rms_ratio;
+    f64 settling_time_ms;
+    bool has_signal;
+    bool attack_was_found;
+    bool settling_was_found;
+} SpeechAnalysisResult;
 
 typedef enum VerificationExcitationType
 {
@@ -95,10 +119,10 @@ typedef enum VerificationPreset
     VERIFICATION_PRESET_RIGID_RIGID = 0,
     VERIFICATION_PRESET_OPEN_OPEN,
     VERIFICATION_PRESET_OPEN_RIGID,
-    VERIFICATION_PRESET_STAGE2_UNIFORM_STOPPED,
-    VERIFICATION_PRESET_STAGE2_NARROW_MOUTH_STOPPED,
-    VERIFICATION_PRESET_STAGE2_WIDE_MOUTH_STOPPED,
-    VERIFICATION_PRESET_STAGE2_OPEN_PIPE,
+    VERIFICATION_PRESET_UNIFORM_STOPPED,
+    VERIFICATION_PRESET_NARROW_MOUTH_STOPPED,
+    VERIFICATION_PRESET_WIDE_MOUTH_STOPPED,
+    VERIFICATION_PRESET_OPEN_PIPE,
 } VerificationPreset;
 
 typedef struct VerificationSettings
@@ -113,6 +137,7 @@ typedef struct VerificationSettings
     bool right_probe_index_was_overridden;
     bool run_length_sweep;
     bool run_nonlinear_mouth_sweep;
+    bool run_speech_analysis;
     u32 block_count;
     u32 length_sweep_start_cell_count;
     u32 length_sweep_end_cell_count;
@@ -130,6 +155,7 @@ typedef struct VerificationRunSummary
 {
     ModeResult mode_results[MODE_COUNT];
     SustainedAnalysisResult sustained;
+    SpeechAnalysisResult speech;
     EnergyResult energy;
     SimulationStats stats;
     u32 pressure_cell_count;
@@ -197,10 +223,10 @@ static const char *GetPresetName (VerificationPreset preset)
         case VERIFICATION_PRESET_RIGID_RIGID: return "rigid-rigid";
         case VERIFICATION_PRESET_OPEN_OPEN: return "open-open";
         case VERIFICATION_PRESET_OPEN_RIGID: return "open-rigid";
-        case VERIFICATION_PRESET_STAGE2_UNIFORM_STOPPED: return "stage2-uniform-stopped";
-        case VERIFICATION_PRESET_STAGE2_NARROW_MOUTH_STOPPED: return "stage2-narrow-mouth";
-        case VERIFICATION_PRESET_STAGE2_WIDE_MOUTH_STOPPED: return "stage2-wide-mouth";
-        case VERIFICATION_PRESET_STAGE2_OPEN_PIPE: return "stage2-open-pipe";
+        case VERIFICATION_PRESET_UNIFORM_STOPPED: return "uniform-stopped";
+        case VERIFICATION_PRESET_NARROW_MOUTH_STOPPED: return "narrow-mouth";
+        case VERIFICATION_PRESET_WIDE_MOUTH_STOPPED: return "wide-mouth";
+        case VERIFICATION_PRESET_OPEN_PIPE: return "open-pipe";
     }
 
     ASSERT(false);
@@ -230,27 +256,27 @@ static bool TryParsePresetName (const char *text, VerificationPreset *preset)
         return true;
     }
 
-    if ((_stricmp(text, "stage2-uniform-stopped") == 0) || (_stricmp(text, "uniform-stopped") == 0))
+    if (_stricmp(text, "uniform-stopped") == 0)
     {
-        *preset = VERIFICATION_PRESET_STAGE2_UNIFORM_STOPPED;
+        *preset = VERIFICATION_PRESET_UNIFORM_STOPPED;
         return true;
     }
 
-    if ((_stricmp(text, "stage2-narrow-mouth") == 0) || (_stricmp(text, "narrow-mouth") == 0))
+    if (_stricmp(text, "narrow-mouth") == 0)
     {
-        *preset = VERIFICATION_PRESET_STAGE2_NARROW_MOUTH_STOPPED;
+        *preset = VERIFICATION_PRESET_NARROW_MOUTH_STOPPED;
         return true;
     }
 
-    if ((_stricmp(text, "stage2-wide-mouth") == 0) || (_stricmp(text, "wide-mouth") == 0))
+    if (_stricmp(text, "wide-mouth") == 0)
     {
-        *preset = VERIFICATION_PRESET_STAGE2_WIDE_MOUTH_STOPPED;
+        *preset = VERIFICATION_PRESET_WIDE_MOUTH_STOPPED;
         return true;
     }
 
-    if ((_stricmp(text, "stage2-open-pipe") == 0) || (_stricmp(text, "open-pipe") == 0))
+    if (_stricmp(text, "open-pipe") == 0)
     {
-        *preset = VERIFICATION_PRESET_STAGE2_OPEN_PIPE;
+        *preset = VERIFICATION_PRESET_OPEN_PIPE;
         return true;
     }
 
@@ -286,16 +312,44 @@ static bool EvaluateLateToEarlyRmsGate (f64 late_to_early_rms_ratio)
            (late_to_early_rms_ratio <= LATE_EARLY_RATIO_MAX);
 }
 
-static bool EvaluateDominantFrequencyDriftGate (f64 dominant_frequency_drift_hz)
+static bool EvaluateDominantFrequencyDriftGate (f64 dominant_frequency_drift_ratio)
 {
-    static const f64 MAX_DOMINANT_FREQUENCY_DRIFT_HZ = 2.0;
-    return dominant_frequency_drift_hz <= MAX_DOMINANT_FREQUENCY_DRIFT_HZ;
+    static const f64 MAX_DOMINANT_FREQUENCY_DRIFT_RATIO = 0.12;
+    return dominant_frequency_drift_ratio <= MAX_DOMINANT_FREQUENCY_DRIFT_RATIO;
 }
 
 static bool EvaluateEnergyDriftGate (f64 energy_drift)
 {
     static const f64 MAX_ABS_ENERGY_DRIFT = 1.0;
     return fabs(energy_drift) <= MAX_ABS_ENERGY_DRIFT;
+}
+
+static bool EvaluateSpeechOnsetToPeakGate (f64 onset_to_peak_ms)
+{
+    static const f64 MAX_ONSET_TO_PEAK_MS = 700.0;
+    return onset_to_peak_ms <= MAX_ONSET_TO_PEAK_MS;
+}
+
+static bool EvaluateSpeechAttackGate (bool attack_was_found, f64 attack_10_to_90_ms)
+{
+    static const f64 MIN_ATTACK_10_TO_90_MS = 2.0;
+    static const f64 MAX_ATTACK_10_TO_90_MS = 650.0;
+
+    if (attack_was_found == false)
+    {
+        return false;
+    }
+
+    return (attack_10_to_90_ms >= MIN_ATTACK_10_TO_90_MS) &&
+           (attack_10_to_90_ms <= MAX_ATTACK_10_TO_90_MS);
+}
+
+static bool EvaluateSpeechChiffToSustainGate (f64 chiff_to_sustain_rms_ratio)
+{
+    static const f64 MIN_CHIFF_RATIO = 0.2;
+    static const f64 MAX_CHIFF_RATIO = 2.5;
+    return (chiff_to_sustain_rms_ratio >= MIN_CHIFF_RATIO) &&
+           (chiff_to_sustain_rms_ratio <= MAX_CHIFF_RATIO);
 }
 
 static void ConfigureSolver (
@@ -308,6 +362,7 @@ static void ConfigureSolver (
 {
     static const f64 TEST_COURANT_NUMBER = 0.9;
     static const f64 DEFAULT_SOURCE_RATIO = 6.0 / 128.0;
+    static const f64 OPEN_PIPE_SOURCE_RATIO = 16.0 / 128.0;
     static const f64 DEFAULT_LEFT_PROBE_RATIO = 72.0 / 128.0;
     static const f64 DEFAULT_RIGHT_PROBE_RATIO = 104.0 / 128.0;
     u32 pressure_cell_count;
@@ -325,6 +380,11 @@ static void ConfigureSolver (
     source_cell_index = settings->source_index_was_overridden ?
         settings->source_cell_index :
         (u32) (DEFAULT_SOURCE_RATIO * (f64) pressure_cell_count);
+    if ((settings->source_index_was_overridden == false) &&
+        (settings->preset == VERIFICATION_PRESET_OPEN_PIPE))
+    {
+        source_cell_index = (u32) (OPEN_PIPE_SOURCE_RATIO * (f64) pressure_cell_count);
+    }
     left_probe_index = settings->left_probe_index_was_overridden ?
         settings->left_probe_index :
         (u32) (DEFAULT_LEFT_PROBE_RATIO * (f64) pressure_cell_count);
@@ -400,7 +460,7 @@ static void ConfigureSolver (
             desc->right_boundary.reflection_coefficient = 1.0;
         } break;
 
-        case VERIFICATION_PRESET_STAGE2_UNIFORM_STOPPED:
+        case VERIFICATION_PRESET_UNIFORM_STOPPED:
         {
             desc->left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
             desc->left_boundary.reflection_coefficient = -1.0;
@@ -408,7 +468,7 @@ static void ConfigureSolver (
             desc->right_boundary.reflection_coefficient = 1.0;
         } break;
 
-        case VERIFICATION_PRESET_STAGE2_NARROW_MOUTH_STOPPED:
+        case VERIFICATION_PRESET_NARROW_MOUTH_STOPPED:
         {
             area_segment_descs[0].start_cell_index = 0;
             area_segment_descs[0].end_cell_index = 20;
@@ -422,7 +482,7 @@ static void ConfigureSolver (
             desc->area_segment_descs = area_segment_descs;
         } break;
 
-        case VERIFICATION_PRESET_STAGE2_WIDE_MOUTH_STOPPED:
+        case VERIFICATION_PRESET_WIDE_MOUTH_STOPPED:
         {
             area_segment_descs[0].start_cell_index = 0;
             area_segment_descs[0].end_cell_index = 20;
@@ -436,7 +496,7 @@ static void ConfigureSolver (
             desc->area_segment_descs = area_segment_descs;
         } break;
 
-        case VERIFICATION_PRESET_STAGE2_OPEN_PIPE:
+        case VERIFICATION_PRESET_OPEN_PIPE:
         {
             area_segment_descs[0].start_cell_index = 0;
             area_segment_descs[0].end_cell_index = pressure_cell_count / 8;
@@ -603,6 +663,7 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->right_probe_index_was_overridden = false;
     settings->run_length_sweep = false;
     settings->run_nonlinear_mouth_sweep = false;
+    settings->run_speech_analysis = false;
     settings->block_count = 256;
     settings->length_sweep_start_cell_count = 64;
     settings->length_sweep_end_cell_count = 256;
@@ -715,6 +776,12 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         {
             settings->run_nonlinear_mouth_sweep = true;
             settings->excitation_type = VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+            continue;
+        }
+
+        if ((_stricmp(argument, "speech-analysis") == 0) || (_stricmp(argument, "speech") == 0))
+        {
+            settings->run_speech_analysis = true;
             continue;
         }
 
@@ -1377,6 +1444,208 @@ static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc)
     return desc->wave_speed_m_per_s / (2.0 * desc->tube_length_m);
 }
 
+static void AnalyzeSpeechBehavior (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    u32 analysis_channel_index,
+    SpeechAnalysisResult *result
+)
+{
+    static const f64 SIGNAL_FLOOR = 1e-8;
+    static const f64 ONSET_THRESHOLD_RATIO = 0.05;
+    static const f64 ATTACK_10_RATIO = 0.10;
+    static const f64 ATTACK_90_RATIO = 0.90;
+    static const f64 MAX_CHIFF_WINDOW_SECONDS = 0.06;
+    static const f64 SETTLE_SUSTAIN_MULTIPLIER = 1.25;
+    static const f64 SETTLE_PEAK_RATIO = 0.12;
+    u32 consecutive_required;
+    u32 frame_index;
+    u32 last_frame;
+    u32 max_chiff_window_frames;
+    u32 settle_consecutive_count;
+    f64 attack_10_threshold;
+    f64 attack_90_threshold;
+    f64 onset_threshold;
+    f64 settle_threshold;
+
+    ASSERT(capture != NULL);
+    ASSERT(capture->samples != NULL);
+    ASSERT(desc != NULL);
+    ASSERT(result != NULL);
+    ASSERT(analysis_channel_index < capture->channel_count);
+    ASSERT(desc->sample_rate > 0);
+
+    memset(result, 0, sizeof(*result));
+    if (capture->frame_count == 0)
+    {
+        return;
+    }
+
+    last_frame = capture->frame_count - 1;
+    for (frame_index = 0; frame_index < capture->frame_count; frame_index += 1)
+    {
+        f64 abs_sample;
+        f32 sample;
+
+        sample = capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        abs_sample = fabs((f64) sample);
+        if (abs_sample > result->peak_abs)
+        {
+            result->peak_abs = abs_sample;
+            result->peak_frame = frame_index;
+        }
+    }
+
+    if (result->peak_abs <= SIGNAL_FLOOR)
+    {
+        return;
+    }
+
+    result->has_signal = true;
+    onset_threshold = ONSET_THRESHOLD_RATIO * result->peak_abs;
+    attack_10_threshold = ATTACK_10_RATIO * result->peak_abs;
+    attack_90_threshold = ATTACK_90_RATIO * result->peak_abs;
+    result->attack_10_frame = result->peak_frame;
+    result->attack_90_frame = result->peak_frame;
+
+    for (frame_index = 0; frame_index < capture->frame_count; frame_index += 1)
+    {
+        f64 abs_sample;
+        f32 sample;
+
+        sample = capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        abs_sample = fabs((f64) sample);
+        if (abs_sample >= onset_threshold)
+        {
+            result->onset_frame = frame_index;
+            break;
+        }
+    }
+
+    for (frame_index = result->onset_frame; frame_index <= result->peak_frame; frame_index += 1)
+    {
+        f64 abs_sample;
+        f32 sample;
+
+        sample = capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        abs_sample = fabs((f64) sample);
+        if (abs_sample >= attack_10_threshold)
+        {
+            result->attack_10_frame = frame_index;
+            break;
+        }
+    }
+
+    for (frame_index = result->attack_10_frame; frame_index <= result->peak_frame; frame_index += 1)
+    {
+        f64 abs_sample;
+        f32 sample;
+
+        sample = capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        abs_sample = fabs((f64) sample);
+        if (abs_sample >= attack_90_threshold)
+        {
+            result->attack_90_frame = frame_index;
+            result->attack_was_found = true;
+            break;
+        }
+    }
+
+    if (result->peak_frame >= result->onset_frame)
+    {
+        result->onset_to_peak_ms = 1000.0 *
+            ((f64) (result->peak_frame - result->onset_frame) / (f64) desc->sample_rate);
+    }
+    if (result->attack_was_found && (result->attack_90_frame >= result->attack_10_frame))
+    {
+        result->attack_10_to_90_ms = 1000.0 *
+            ((f64) (result->attack_90_frame - result->attack_10_frame) / (f64) desc->sample_rate);
+    }
+
+    max_chiff_window_frames = (u32) (MAX_CHIFF_WINDOW_SECONDS * (f64) desc->sample_rate);
+    if (max_chiff_window_frames < 16)
+    {
+        max_chiff_window_frames = 16;
+    }
+    if (max_chiff_window_frames > (capture->frame_count / 8))
+    {
+        max_chiff_window_frames = capture->frame_count / 8;
+    }
+    if (max_chiff_window_frames < 1)
+    {
+        max_chiff_window_frames = 1;
+    }
+
+    result->chiff_start_frame = result->onset_frame;
+    result->chiff_end_frame = result->chiff_start_frame + max_chiff_window_frames - 1;
+    if (result->chiff_end_frame > last_frame)
+    {
+        result->chiff_end_frame = last_frame;
+    }
+
+    result->sustain_start_frame = (capture->frame_count * 3) / 4;
+    if (result->sustain_start_frame > last_frame)
+    {
+        result->sustain_start_frame = last_frame;
+    }
+    result->sustain_end_frame = last_frame;
+
+    result->chiff_rms = ComputeWindowRms(
+        capture,
+        analysis_channel_index,
+        result->chiff_start_frame,
+        result->chiff_end_frame
+    );
+    result->sustain_rms = ComputeWindowRms(
+        capture,
+        analysis_channel_index,
+        result->sustain_start_frame,
+        result->sustain_end_frame
+    );
+    result->chiff_to_sustain_rms_ratio = result->chiff_rms / (result->sustain_rms + 1e-12);
+
+    settle_threshold = SETTLE_SUSTAIN_MULTIPLIER * result->sustain_rms;
+    if (settle_threshold < (SETTLE_PEAK_RATIO * result->peak_abs))
+    {
+        settle_threshold = SETTLE_PEAK_RATIO * result->peak_abs;
+    }
+
+    consecutive_required = desc->sample_rate / 200;
+    if (consecutive_required < 16)
+    {
+        consecutive_required = 16;
+    }
+    settle_consecutive_count = 0;
+    for (frame_index = result->peak_frame; frame_index < capture->frame_count; frame_index += 1)
+    {
+        f64 abs_sample;
+        f32 sample;
+
+        sample = capture->samples[(usize) frame_index * (usize) capture->channel_count + analysis_channel_index];
+        abs_sample = fabs((f64) sample);
+        if (abs_sample <= settle_threshold)
+        {
+            settle_consecutive_count += 1;
+            if (settle_consecutive_count >= consecutive_required)
+            {
+                result->settle_frame = frame_index + 1 - consecutive_required;
+                result->settling_was_found = true;
+                break;
+            }
+        }
+        else
+        {
+            settle_consecutive_count = 0;
+        }
+    }
+
+    if (result->settling_was_found && (result->settle_frame >= result->onset_frame))
+    {
+        result->settling_time_ms = 1000.0 *
+            ((f64) (result->settle_frame - result->onset_frame) / (f64) desc->sample_rate);
+    }
+}
+
 static void AnalyzeSustainedBehavior (
     const SimulationOfflineCapture *capture,
     const Fdtd1DDesc *desc,
@@ -1472,6 +1741,8 @@ static void AnalyzeSustainedBehavior (
     );
     result->dominant_frequency_drift_hz =
         fabs(result->late_dominant_frequency_b_hz - result->late_dominant_frequency_a_hz);
+    result->dominant_frequency_drift_ratio = result->dominant_frequency_drift_hz /
+        (fundamental_frequency_hz + 1e-12);
 
     ComputeSpectralQualityMetrics(
         capture,
@@ -1786,6 +2057,7 @@ static bool RunVerification (
         summary->mode_results
     );
     AnalyzeSustainedBehavior(capture, solver_desc, 0, &summary->sustained);
+    AnalyzeSpeechBehavior(capture, solver_desc, 0, &summary->speech);
 
     summary->stats = *Simulation_GetStats(simulation);
     summary->pressure_cell_count = solver_desc->pressure_cell_count;
@@ -1972,7 +2244,9 @@ int main (int argc, char **argv)
             nonlinear_mouth_sweep_results[sweep_result_count].late_to_early_rms_ok =
                 EvaluateLateToEarlyRmsGate(nonlinear_mouth_sweep_results[sweep_result_count].late_to_early_rms_ratio);
             nonlinear_mouth_sweep_results[sweep_result_count].dominant_frequency_drift_ok =
-                EvaluateDominantFrequencyDriftGate(nonlinear_mouth_sweep_results[sweep_result_count].dominant_frequency_drift_hz);
+                EvaluateDominantFrequencyDriftGate(
+                    summary.sustained.dominant_frequency_drift_ratio
+                );
             nonlinear_mouth_sweep_results[sweep_result_count].energy_drift_ok =
                 EvaluateEnergyDriftGate(nonlinear_mouth_sweep_results[sweep_result_count].energy_drift);
             nonlinear_mouth_sweep_results[sweep_result_count].is_stable_candidate =
@@ -2003,7 +2277,7 @@ int main (int argc, char **argv)
         printf("Gates\n");
         printf("  early_rms_min:          0.01\n");
         printf("  late/early_rms_ratio:   [0.5, 1.5]\n");
-        printf("  dominant_freq_drift_hz: <= 2.0\n");
+        printf("  dominant_freq_drift_ratio: <= 0.12\n");
         printf("  abs_energy_drift:       <= 1.0\n");
         printf("\n");
         printf("Sweep Results\n");
@@ -2120,6 +2394,9 @@ int main (int argc, char **argv)
     );
     printf("  excitation:            %s\n",
         GetExcitationTypeName(settings.excitation_type)
+    );
+    printf("  speech_analysis:       %s\n",
+        settings.run_speech_analysis ? "enabled" : "disabled"
     );
     printf("  mouth_feedback_leak:   %.6f\n",
         settings.nonlinear_mouth_parameters.feedback_leak
@@ -2312,6 +2589,9 @@ int main (int argc, char **argv)
     printf("  dominant_freq_drift_hz: %.2f\n",
         summary.sustained.dominant_frequency_drift_hz
     );
+    printf("  dominant_freq_drift_ratio: %.6f\n",
+        summary.sustained.dominant_frequency_drift_ratio
+    );
     printf("  late_spectral_centroid: %.2f\n",
         summary.sustained.late_spectral_centroid_hz
     );
@@ -2331,12 +2611,102 @@ int main (int argc, char **argv)
         EvaluateLateToEarlyRmsGate(summary.sustained.late_to_early_rms_ratio) ? "pass" : "fail"
     );
     printf("  freq_drift_gate:        %s\n",
-        EvaluateDominantFrequencyDriftGate(summary.sustained.dominant_frequency_drift_hz) ? "pass" : "fail"
+        EvaluateDominantFrequencyDriftGate(summary.sustained.dominant_frequency_drift_ratio) ? "pass" : "fail"
     );
     printf("  energy_drift_gate:      %s\n",
         EvaluateEnergyDriftGate(summary.energy.final_energy - summary.energy.initial_energy) ? "pass" : "fail"
     );
     printf("\n");
+
+    if (settings.run_speech_analysis)
+    {
+        printf("Speech/Onset Analysis\n");
+        printf("  analysis_channel:       0\n");
+        if (summary.speech.has_signal == false)
+        {
+            printf("  signal_detected:        no\n");
+            printf("\n");
+        }
+        else
+        {
+            printf("  signal_detected:        yes\n");
+            printf("  peak_abs:               %.9f\n",
+                summary.speech.peak_abs
+            );
+            printf("  onset_frame:            %u\n",
+                summary.speech.onset_frame
+            );
+            printf("  peak_frame:             %u\n",
+                summary.speech.peak_frame
+            );
+            printf("  onset_to_peak_ms:       %.3f\n",
+                summary.speech.onset_to_peak_ms
+            );
+            printf("  attack_10_frame:        %u\n",
+                summary.speech.attack_10_frame
+            );
+            printf("  attack_90_frame:        %u\n",
+                summary.speech.attack_90_frame
+            );
+            printf("  attack_10_to_90_ms:     ");
+            if (summary.speech.attack_was_found)
+            {
+                printf("%.3f\n", summary.speech.attack_10_to_90_ms);
+            }
+            else
+            {
+                printf("not found\n");
+            }
+            printf("  chiff_window:           [%u, %u]\n",
+                summary.speech.chiff_start_frame,
+                summary.speech.chiff_end_frame
+            );
+            printf("  sustain_window:         [%u, %u]\n",
+                summary.speech.sustain_start_frame,
+                summary.speech.sustain_end_frame
+            );
+            printf("  chiff_rms:              %.9f\n",
+                summary.speech.chiff_rms
+            );
+            printf("  sustain_rms:            %.9f\n",
+                summary.speech.sustain_rms
+            );
+            printf("  chiff/sustain_rms:      %.6f\n",
+                summary.speech.chiff_to_sustain_rms_ratio
+            );
+            printf("  settling_frame:         ");
+            if (summary.speech.settling_was_found)
+            {
+                printf("%u\n", summary.speech.settle_frame);
+            }
+            else
+            {
+                printf("not found\n");
+            }
+            printf("  settling_time_ms:       ");
+            if (summary.speech.settling_was_found)
+            {
+                printf("%.3f\n", summary.speech.settling_time_ms);
+            }
+            else
+            {
+                printf("not found\n");
+            }
+            printf("  onset_to_peak_gate:     %s\n",
+                EvaluateSpeechOnsetToPeakGate(summary.speech.onset_to_peak_ms) ? "pass" : "fail"
+            );
+            printf("  attack_10_to_90_gate:   %s\n",
+                EvaluateSpeechAttackGate(summary.speech.attack_was_found, summary.speech.attack_10_to_90_ms) ? "pass" : "fail"
+            );
+            printf("  chiff/sustain_gate:     %s\n",
+                EvaluateSpeechChiffToSustainGate(summary.speech.chiff_to_sustain_rms_ratio) ? "pass" : "fail"
+            );
+            printf("  settling_gate:          %s\n",
+                summary.speech.settling_was_found ? "pass" : "warn"
+            );
+            printf("\n");
+        }
+    }
 
     if (settings.csv_output_path != NULL)
     {
