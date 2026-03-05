@@ -52,6 +52,14 @@ typedef enum AppSourceCouplingMode
     APP_SOURCE_COUPLING_MODE_COUNT,
 } AppSourceCouplingMode;
 
+typedef enum AppJetProfile
+{
+    APP_JET_PROFILE_BASELINE = 0,
+    APP_JET_PROFILE_BREATHY,
+    APP_JET_PROFILE_STABLE_SOFT,
+    APP_JET_PROFILE_COUNT,
+} AppJetProfile;
+
 typedef struct NoteEvent
 {
     u32 note_index;
@@ -72,6 +80,7 @@ typedef struct AppState
     AppExcitationMode active_excitation_mode;
     AppSourceCouplingMode active_source_coupling_mode;
     AppOutputExtractionMode active_output_extraction_mode;
+    AppJetProfile active_jet_profile;
     f32 drive_amplitude;
     f32 windchest_pressure;
     f32 speech_attack_seconds;
@@ -138,7 +147,7 @@ static const f64 RANK_NOTE_SOURCE_RATIOS[RANK_NOTE_COUNT] =
 
 static const u32 RANK_NOTE_CELL_COUNTS[RANK_NOTE_COUNT] =
 {
-    38, 34, 30, 29, 25, 23, 20, 19
+    38, 34, 30, 28, 25, 23, 20, 19
 };
 
 static Fdtd1DOutputExtractionMode ToRenderSourceOutputExtractionMode (AppOutputExtractionMode app_mode)
@@ -244,6 +253,76 @@ static const char *GetOutputExtractionModeName (AppOutputExtractionMode output_e
 
     ASSERT(false);
     return "Unknown";
+}
+
+static const char *GetJetProfileName (AppJetProfile jet_profile)
+{
+    switch (jet_profile)
+    {
+        case APP_JET_PROFILE_BASELINE: return "Baseline";
+        case APP_JET_PROFILE_BREATHY: return "Breathy";
+        case APP_JET_PROFILE_STABLE_SOFT: return "Stable Soft";
+        case APP_JET_PROFILE_COUNT: break;
+    }
+
+    ASSERT(false);
+    return "Unknown";
+}
+
+static Fdtd1DJetLabiumParameters GetJetProfileParameters (AppJetProfile jet_profile)
+{
+    Fdtd1DJetLabiumParameters parameters;
+
+    parameters.max_output = 0.0020f;
+    parameters.noise_scale = 0.15f;
+    parameters.pressure_feedback = 0.16f;
+    parameters.velocity_feedback = 0.05f;
+    parameters.feedback_leak = 0.35f;
+    parameters.jet_smoothing = 0.30f;
+    parameters.labium_split_gain = 1.9f;
+    parameters.saturation_gain = 12.0f;
+    parameters.drive_limit = 0.0022f;
+    parameters.delay_samples = 9u;
+
+    switch (jet_profile)
+    {
+        case APP_JET_PROFILE_BASELINE: break;
+
+        case APP_JET_PROFILE_BREATHY:
+        {
+            parameters.max_output = 0.0026f;
+            parameters.noise_scale = 0.32f;
+            parameters.pressure_feedback = 0.12f;
+            parameters.velocity_feedback = 0.04f;
+            parameters.feedback_leak = 0.45f;
+            parameters.jet_smoothing = 0.22f;
+            parameters.labium_split_gain = 1.4f;
+            parameters.saturation_gain = 8.5f;
+            parameters.drive_limit = 0.0028f;
+            parameters.delay_samples = 8u;
+        } break;
+
+        case APP_JET_PROFILE_STABLE_SOFT:
+        {
+            parameters.max_output = 0.0017f;
+            parameters.noise_scale = 0.06f;
+            parameters.pressure_feedback = 0.22f;
+            parameters.velocity_feedback = 0.07f;
+            parameters.feedback_leak = 0.55f;
+            parameters.jet_smoothing = 0.50f;
+            parameters.labium_split_gain = 2.6f;
+            parameters.saturation_gain = 16.0f;
+            parameters.drive_limit = 0.0018f;
+            parameters.delay_samples = 11u;
+        } break;
+
+        case APP_JET_PROFILE_COUNT:
+        {
+            ASSERT(false);
+        } break;
+    }
+
+    return parameters;
 }
 
 static void UpdateWindowTitle (AppState *app)
@@ -782,6 +861,27 @@ static void ApplyExcitationSettingsToSources (AppState *app)
     }
 }
 
+static void ApplyJetProfileToSources (AppState *app)
+{
+    Fdtd1DJetLabiumParameters parameters;
+    u32 note_index;
+    FdtdPresetType preset_type;
+
+    ASSERT(app != NULL);
+
+    parameters = GetJetProfileParameters(app->active_jet_profile);
+
+    for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+    {
+        Fdtd1DRenderSource_SetJetLabiumParameters(&app->fdtd_render_sources[preset_type], &parameters);
+    }
+
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        Fdtd1DRenderSource_SetJetLabiumParameters(&app->rank_render_sources[note_index], &parameters);
+    }
+}
+
 static void ApplyListenerSettingsToSources (AppState *app)
 {
     u32 note_index;
@@ -910,6 +1010,16 @@ static void SelectSourceCouplingMode (AppState *app, AppSourceCouplingMode sourc
 
     app->active_source_coupling_mode = source_coupling_mode;
     ApplyExcitationSettingsToSources(app);
+}
+
+static void SelectJetProfile (AppState *app, AppJetProfile jet_profile)
+{
+    ASSERT(app != NULL);
+    ASSERT(jet_profile < APP_JET_PROFILE_COUNT);
+
+    app->active_jet_profile = jet_profile;
+    ApplyJetProfileToSources(app);
+    RestartSpeechForAllSources(app);
 }
 
 static void SetDriveAmplitude (AppState *app, f32 drive_amplitude)
@@ -1324,6 +1434,7 @@ int App_Run (void)
     app->active_excitation_mode = APP_EXCITATION_MODE_IMPULSE;
     app->active_source_coupling_mode = APP_SOURCE_COUPLING_MODE_PRESSURE;
     app->active_output_extraction_mode = APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
+    app->active_jet_profile = APP_JET_PROFILE_BASELINE;
     app->drive_amplitude = 0.0f;
     app->windchest_pressure = 1.0f;
     app->speech_attack_seconds = 0.06f;
@@ -1338,6 +1449,7 @@ int App_Run (void)
     AudioEngine_SetMasterGain(&app->audio_engine, app->master_gain);
     AudioEngine_SetOutputMuted(&app->audio_engine, app->output_is_muted);
     ApplyExcitationSettingsToSources(app);
+    ApplyJetProfileToSources(app);
     ApplyOutputExtractionModeToSources(app);
     ApplyListenerSettingsToSources(app);
     SetActiveRenderSource(app, true);
@@ -1382,6 +1494,7 @@ int App_Run (void)
         const char *excitation_mode_names[APP_EXCITATION_MODE_COUNT];
         const char *source_coupling_mode_names[APP_SOURCE_COUPLING_MODE_COUNT];
         const char *output_extraction_mode_names[APP_OUTPUT_EXTRACTION_MODE_COUNT];
+        const char *jet_profile_names[APP_JET_PROFILE_COUNT];
         const char *preset_names[FDTD_PRESET_TYPE_COUNT];
 
         FrameTimer_BeginFrame(&app->frame_timer);
@@ -1406,6 +1519,9 @@ int App_Run (void)
         output_extraction_mode_names[0] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES);
         output_extraction_mode_names[1] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION);
         output_extraction_mode_names[2] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_LISTENER_MODEL);
+        jet_profile_names[0] = GetJetProfileName(APP_JET_PROFILE_BASELINE);
+        jet_profile_names[1] = GetJetProfileName(APP_JET_PROFILE_BREATHY);
+        jet_profile_names[2] = GetJetProfileName(APP_JET_PROFILE_STABLE_SOFT);
 
         gui_frame_desc.fdtd_source_is_active = app->fdtd_source_is_active;
         gui_frame_desc.output_is_muted = app->output_is_muted;
@@ -1431,10 +1547,13 @@ int App_Run (void)
         gui_frame_desc.source_coupling_mode_count = APP_SOURCE_COUPLING_MODE_COUNT;
         gui_frame_desc.active_output_extraction_mode = app->active_output_extraction_mode;
         gui_frame_desc.output_extraction_mode_count = APP_OUTPUT_EXTRACTION_MODE_COUNT;
+        gui_frame_desc.active_jet_profile = app->active_jet_profile;
+        gui_frame_desc.jet_profile_count = APP_JET_PROFILE_COUNT;
         gui_frame_desc.preset_count = FDTD_PRESET_TYPE_COUNT;
         gui_frame_desc.excitation_mode_names = excitation_mode_names;
         gui_frame_desc.source_coupling_mode_names = source_coupling_mode_names;
         gui_frame_desc.output_extraction_mode_names = output_extraction_mode_names;
+        gui_frame_desc.jet_profile_names = jet_profile_names;
         gui_frame_desc.preset_names = preset_names;
         gui_frame_desc.delta_seconds = app->frame_timer.delta_seconds;
 
@@ -1474,6 +1593,11 @@ int App_Run (void)
         if (gui_actions.request_select_output_extraction_mode)
         {
             SelectOutputExtractionMode(app, (AppOutputExtractionMode) gui_actions.selected_output_extraction_mode);
+        }
+
+        if (gui_actions.request_select_jet_profile)
+        {
+            SelectJetProfile(app, (AppJetProfile) gui_actions.selected_jet_profile);
         }
 
         if (gui_actions.request_set_drive_amplitude)

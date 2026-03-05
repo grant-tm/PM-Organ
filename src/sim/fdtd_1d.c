@@ -270,6 +270,10 @@ static void ResetStateCallback (Simulation *simulation)
     {
         memset(state->source_jet_state, 0, sizeof(f32) * (usize) state->source_count);
     }
+    if ((state->source_jet_regime_state != NULL) && (state->source_count > 0))
+    {
+        memset(state->source_jet_regime_state, 0, sizeof(f32) * (usize) state->source_count);
+    }
     state->left_previous_outgoing_pressure = 0.0f;
     state->left_previous_incoming_pressure = 0.0f;
     state->right_previous_outgoing_pressure = 0.0f;
@@ -569,6 +573,9 @@ static f32 ComputeJetLabiumExcitation (
     static const u32 MIN_CONVECTION_DELAY_SAMPLES = 2;
     static const f32 JET_LABIUM_BACKPRESSURE_COUPLING = 0.35f;
     static const f32 JET_LABIUM_BACKPRESSURE_LIMIT_SCALE = 6.0f;
+    static const f32 JET_REGIME_ON_THRESHOLD = 0.22f;
+    static const f32 JET_REGIME_OFF_THRESHOLD = 0.16f;
+    static const f32 JET_REGIME_SMOOTHING = 0.12f;
     f32 delayed_feedback;
     f32 backpressure_term;
     f32 feedback_term;
@@ -589,6 +596,12 @@ static f32 ComputeJetLabiumExcitation (
     f32 drive_norm;
     f32 turbulence;
     f32 turbulence_weight;
+    f32 regime_state;
+    f32 regime_target;
+    f32 voiced_mix;
+    f32 labium_gain;
+    f32 turbulence_gain;
+    bool regime_is_active;
     f32 *delay_buffer;
     u32 delay_index;
     u32 dynamic_delay_max;
@@ -601,6 +614,7 @@ static f32 ComputeJetLabiumExcitation (
     ASSERT(source_index < state->source_count);
     ASSERT(cell_index < state->pressure_cell_count);
     ASSERT(state->source_jet_state != NULL);
+    ASSERT(state->source_jet_regime_state != NULL);
     ASSERT(state->mouth_feedback_delay_buffer != NULL);
     ASSERT(state->mouth_feedback_delay_lengths != NULL);
     ASSERT(state->mouth_feedback_delay_indices != NULL);
@@ -697,16 +711,33 @@ static f32 ComputeJetLabiumExcitation (
     jet_state += state->jet_labium.jet_smoothing * (jet_drive - jet_state);
     state->source_jet_state[source_index] = jet_state;
 
-    jet_error = jet_state - (0.5f * feedback_term);
-    labium_split = tanhf(state->jet_labium.labium_split_gain * jet_error);
+    regime_state = state->source_jet_regime_state[source_index];
+    regime_is_active = regime_state >= 0.5f;
+    if (regime_is_active)
+    {
+        regime_target = (normalized_wind_drive >= JET_REGIME_OFF_THRESHOLD) ? 1.0f : 0.0f;
+    }
+    else
+    {
+        regime_target = (normalized_wind_drive >= JET_REGIME_ON_THRESHOLD) ? 1.0f : 0.0f;
+    }
+    regime_state += JET_REGIME_SMOOTHING * (regime_target - regime_state);
+    regime_state = ClampF32(regime_state, 0.0f, 1.0f);
+    state->source_jet_regime_state[source_index] = regime_state;
+
+    voiced_mix = ClampF32((regime_state - 0.1f) / 0.9f, 0.0f, 1.0f);
+    jet_error = jet_state - ((0.25f + (0.30f * voiced_mix)) * feedback_term);
+    labium_gain = state->jet_labium.labium_split_gain * (0.70f + (0.60f * voiced_mix));
+    labium_split = tanhf(labium_gain * jet_error);
     drive_norm = state->jet_labium.drive_limit;
     if (drive_norm <= 0.0f)
     {
         drive_norm = 0.000001f;
     }
     turbulence_weight = ClampF32(fabsf(jet_state) / drive_norm, 0.0f, 1.0f);
+    turbulence_gain = (0.08f + (0.32f * (1.0f - voiced_mix))) + (0.18f * turbulence_weight);
     turbulence =
-        (0.15f + (0.85f * turbulence_weight)) *
+        turbulence_gain *
         state->jet_labium.noise_scale *
         wind_drive *
         NextNoiseSample(state);
@@ -1604,6 +1635,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     {
         state->source_cell_indices = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
         state->source_jet_state = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, f32);
+        state->source_jet_regime_state = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, f32);
         state->mouth_feedback_delay_lengths = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
         state->mouth_feedback_delay_indices = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
         state->mouth_feedback_delay_capacity = NONLINEAR_MOUTH_MAX_DELAY_SAMPLES;
@@ -1614,6 +1646,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
         );
         if ((state->source_cell_indices == NULL) ||
             (state->source_jet_state == NULL) ||
+            (state->source_jet_regime_state == NULL) ||
             (state->mouth_feedback_delay_lengths == NULL) ||
             (state->mouth_feedback_delay_indices == NULL) ||
             (state->mouth_feedback_delay_buffer == NULL))
@@ -1666,6 +1699,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     for (source_index = 0; source_index < desc->source_count; source_index += 1)
     {
         state->source_cell_indices[source_index] = desc->source_descs[source_index].cell_index;
+        state->source_jet_state[source_index] = 0.0f;
+        state->source_jet_regime_state[source_index] = 0.0f;
         state->mouth_feedback_delay_lengths[source_index] = DEFAULT_NONLINEAR_MOUTH_PARAMETERS.delay_samples;
         state->mouth_feedback_delay_indices[source_index] = 0;
     }

@@ -23,6 +23,27 @@ enum
 };
 
 static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc);
+static f64 ComputeSpectrumMagnitude (
+    const SimulationOfflineCapture *capture,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 sample_rate,
+    f64 frequency_hz
+);
+static void ComputeSpectralQualityMetrics (
+    const SimulationOfflineCapture *capture,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 sample_rate,
+    f64 frequency_start_hz,
+    f64 frequency_end_hz,
+    f64 frequency_step_hz,
+    f64 *centroid_hz,
+    f64 *flatness,
+    f64 *total_energy
+);
 
 typedef struct VerificationResult
 {
@@ -157,6 +178,7 @@ typedef struct VerificationSettings
     bool run_parameter_sweep;
     bool run_stage4_suite;
     bool run_stage6_suite;
+    bool run_organ_voicing_suite;
     bool run_speech_analysis;
     bool run_voicing_loop;
     const char *summary_csv_path;
@@ -313,6 +335,366 @@ typedef struct Stage6SuiteNoteResult
     bool stability_gate_ok;
     bool overall_voicing_gate_ok;
 } Stage6SuiteNoteResult;
+
+typedef struct OrganVoicingNoteResult
+{
+    u32 note_index;
+    u32 semitone_offset;
+    u32 pressure_cell_count;
+    u32 source_cell_index;
+    f64 measured_f0_hz;
+    f64 ratio_error_percent;
+    f64 attack_10_to_90_ms;
+    f64 settle_ms;
+    f64 low_band_ratio;
+    f64 mid_band_ratio;
+    f64 high_band_ratio;
+    f64 odd_even_balance_db;
+    f64 harmonic_to_noise_db;
+    f64 f0_drift_cents;
+    f64 voicing_score;
+} OrganVoicingNoteResult;
+
+static bool WriteOrganVoicingSuiteCsv (
+    const char *path,
+    const OrganVoicingNoteResult *results,
+    u32 result_count
+)
+{
+    FILE *file;
+    u32 result_index;
+
+    ASSERT(path != NULL);
+    ASSERT(results != NULL);
+
+    file = NULL;
+    if (fopen_s(&file, path, "w") != 0)
+    {
+        return false;
+    }
+
+    fprintf(
+        file,
+        "note_index,semitone_offset,pressure_cells,source_cell,f0_hz,ratio_error_percent,"
+        "attack_10_to_90_ms,settle_ms,low_band_percent,mid_band_percent,high_band_percent,"
+        "odd_even_balance_db,harmonic_to_noise_db,f0_drift_cents,voicing_score\n"
+    );
+
+    for (result_index = 0; result_index < result_count; result_index += 1)
+    {
+        const OrganVoicingNoteResult *result;
+
+        result = &results[result_index];
+        fprintf(
+            file,
+            "%u,%u,%u,%u,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n",
+            result->note_index,
+            result->semitone_offset,
+            result->pressure_cell_count,
+            result->source_cell_index,
+            result->measured_f0_hz,
+            result->ratio_error_percent,
+            result->attack_10_to_90_ms,
+            result->settle_ms,
+            100.0 * result->low_band_ratio,
+            100.0 * result->mid_band_ratio,
+            100.0 * result->high_band_ratio,
+            result->odd_even_balance_db,
+            result->harmonic_to_noise_db,
+            result->f0_drift_cents,
+            result->voicing_score
+        );
+    }
+
+    fclose(file);
+    return true;
+}
+
+static f64 ClampUnitF64 (f64 value)
+{
+    if (value < 0.0)
+    {
+        return 0.0;
+    }
+    if (value > 1.0)
+    {
+        return 1.0;
+    }
+    return value;
+}
+
+static f64 ComputeOrganVoicingScore (const OrganVoicingNoteResult *result)
+{
+    f64 ratio_penalty;
+    f64 attack_penalty;
+    f64 settle_penalty;
+    f64 drift_penalty;
+    f64 band_penalty;
+    f64 hnr_penalty;
+    f64 total_penalty;
+
+    ASSERT(result != NULL);
+
+    ratio_penalty = fabs(result->ratio_error_percent) / 6.0;
+    ratio_penalty = ClampUnitF64(ratio_penalty);
+
+    if (result->attack_10_to_90_ms < 0.0)
+    {
+        attack_penalty = 0.7;
+    }
+    else if (result->attack_10_to_90_ms < 5.0)
+    {
+        attack_penalty = (5.0 - result->attack_10_to_90_ms) / 50.0;
+    }
+    else if (result->attack_10_to_90_ms > 650.0)
+    {
+        attack_penalty = (result->attack_10_to_90_ms - 650.0) / 400.0;
+    }
+    else
+    {
+        attack_penalty = 0.0;
+    }
+    attack_penalty = ClampUnitF64(attack_penalty);
+
+    if (result->settle_ms < 0.0)
+    {
+        settle_penalty = 0.25;
+    }
+    else
+    {
+        settle_penalty = 0.0;
+    }
+
+    drift_penalty = fabs(result->f0_drift_cents) / 35.0;
+    drift_penalty = ClampUnitF64(drift_penalty);
+
+    band_penalty =
+        fabs(result->low_band_ratio - 0.70) / 0.40 +
+        fabs(result->mid_band_ratio - 0.15) / 0.20 +
+        fabs(result->high_band_ratio - 0.15) / 0.20;
+    band_penalty *= 0.33;
+    band_penalty = ClampUnitF64(band_penalty);
+
+    if (result->harmonic_to_noise_db < -28.0)
+    {
+        hnr_penalty = (-28.0 - result->harmonic_to_noise_db) / 20.0;
+    }
+    else if (result->harmonic_to_noise_db > 8.0)
+    {
+        hnr_penalty = (result->harmonic_to_noise_db - 8.0) / 20.0;
+    }
+    else
+    {
+        hnr_penalty = 0.0;
+    }
+    hnr_penalty = ClampUnitF64(hnr_penalty);
+
+    total_penalty =
+        0.30 * ratio_penalty +
+        0.20 * drift_penalty +
+        0.20 * band_penalty +
+        0.20 * hnr_penalty +
+        0.07 * attack_penalty +
+        0.03 * settle_penalty;
+    total_penalty = ClampUnitF64(total_penalty);
+
+    return 100.0 * (1.0 - total_penalty);
+}
+
+static void AnalyzeOrganBandRatios (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 *low_ratio,
+    f64 *mid_ratio,
+    f64 *high_ratio
+)
+{
+    f64 low_energy;
+    f64 mid_energy;
+    f64 high_energy;
+    f64 centroid;
+    f64 flatness;
+    f64 total_energy;
+
+    ASSERT(capture != NULL);
+    ASSERT(desc != NULL);
+    ASSERT(low_ratio != NULL);
+    ASSERT(mid_ratio != NULL);
+    ASSERT(high_ratio != NULL);
+
+    low_energy = 0.0;
+    mid_energy = 0.0;
+    high_energy = 0.0;
+
+    ComputeSpectralQualityMetrics(
+        capture,
+        analysis_channel_index,
+        start_frame,
+        end_frame,
+        (f64) desc->sample_rate,
+        80.0,
+        500.0,
+        5.0,
+        &centroid,
+        &flatness,
+        &low_energy
+    );
+    ComputeSpectralQualityMetrics(
+        capture,
+        analysis_channel_index,
+        start_frame,
+        end_frame,
+        (f64) desc->sample_rate,
+        500.0,
+        2000.0,
+        5.0,
+        &centroid,
+        &flatness,
+        &mid_energy
+    );
+    ComputeSpectralQualityMetrics(
+        capture,
+        analysis_channel_index,
+        start_frame,
+        end_frame,
+        (f64) desc->sample_rate,
+        2000.0,
+        6000.0,
+        5.0,
+        &centroid,
+        &flatness,
+        &high_energy
+    );
+
+    total_energy = low_energy + mid_energy + high_energy + 1e-12;
+    *low_ratio = low_energy / total_energy;
+    *mid_ratio = mid_energy / total_energy;
+    *high_ratio = high_energy / total_energy;
+}
+
+static f64 ComputeOddEvenBalanceDb (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 fundamental_hz
+)
+{
+    f64 odd_sum;
+    f64 even_sum;
+    u32 harmonic_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(desc != NULL);
+
+    if (fundamental_hz <= 0.0)
+    {
+        return 0.0;
+    }
+
+    odd_sum = 0.0;
+    even_sum = 0.0;
+
+    for (harmonic_index = 1; harmonic_index <= 10; harmonic_index += 1)
+    {
+        f64 harmonic_hz;
+        f64 magnitude;
+
+        harmonic_hz = fundamental_hz * (f64) harmonic_index;
+        if (harmonic_hz >= (0.5 * (f64) desc->sample_rate - 20.0))
+        {
+            break;
+        }
+
+        magnitude = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            start_frame,
+            end_frame,
+            (f64) desc->sample_rate,
+            harmonic_hz
+        );
+        if ((harmonic_index % 2) == 0)
+        {
+            even_sum += magnitude * magnitude;
+        }
+        else
+        {
+            odd_sum += magnitude * magnitude;
+        }
+    }
+
+    return 10.0 * log10((odd_sum + 1e-12) / (even_sum + 1e-12));
+}
+
+static f64 ComputeHarmonicToNoiseDb (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    u32 analysis_channel_index,
+    u32 start_frame,
+    u32 end_frame,
+    f64 fundamental_hz
+)
+{
+    f64 harmonic_sum;
+    f64 centroid;
+    f64 flatness;
+    f64 total_energy;
+    u32 harmonic_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(desc != NULL);
+
+    harmonic_sum = 0.0;
+    total_energy = 0.0;
+
+    if (fundamental_hz <= 0.0)
+    {
+        return 0.0;
+    }
+
+    for (harmonic_index = 1; harmonic_index <= 12; harmonic_index += 1)
+    {
+        f64 harmonic_hz;
+        f64 magnitude;
+
+        harmonic_hz = fundamental_hz * (f64) harmonic_index;
+        if (harmonic_hz >= (0.5 * (f64) desc->sample_rate - 20.0))
+        {
+            break;
+        }
+
+        magnitude = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            start_frame,
+            end_frame,
+            (f64) desc->sample_rate,
+            harmonic_hz
+        );
+        harmonic_sum += magnitude * magnitude;
+    }
+
+    ComputeSpectralQualityMetrics(
+        capture,
+        analysis_channel_index,
+        start_frame,
+        end_frame,
+        (f64) desc->sample_rate,
+        80.0,
+        6000.0,
+        5.0,
+        &centroid,
+        &flatness,
+        &total_energy
+    );
+
+    return 10.0 * log10((harmonic_sum + 1e-12) / (total_energy - harmonic_sum + 1e-12));
+}
 
 static const char *GetProbeTypeName (Fdtd1DProbeType probe_type)
 {
@@ -938,6 +1320,7 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->run_parameter_sweep = false;
     settings->run_stage4_suite = false;
     settings->run_stage6_suite = false;
+    settings->run_organ_voicing_suite = false;
     settings->run_speech_analysis = false;
     settings->run_voicing_loop = false;
     settings->summary_csv_path = NULL;
@@ -1110,6 +1493,12 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
             continue;
         }
 
+        if ((_stricmp(argument, "organ-voicing-suite") == 0) || (_stricmp(argument, "suite-organ-voicing") == 0))
+        {
+            settings->run_organ_voicing_suite = true;
+            continue;
+        }
+
         if ((_stricmp(argument, "speech-analysis") == 0) || (_stricmp(argument, "speech") == 0))
         {
             settings->run_speech_analysis = true;
@@ -1170,6 +1559,69 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         if (TryParseDoubleValue(argument, "mouth_drive_limit=", &parsed_f64))
         {
             settings->nonlinear_mouth_parameters.drive_limit = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseUnsignedValue(argument, "jet_delay=", &parsed_value))
+        {
+            if (parsed_value > 0)
+            {
+                settings->jet_labium_parameters.delay_samples = parsed_value;
+            }
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_max_output=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.max_output = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_noise_scale=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.noise_scale = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_pressure_feedback=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.pressure_feedback = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_velocity_feedback=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.velocity_feedback = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_feedback_leak=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.feedback_leak = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_smoothing=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.jet_smoothing = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_labium_split_gain=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.labium_split_gain = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_saturation_gain=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.saturation_gain = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_drive_limit=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.drive_limit = (f32) parsed_f64;
             continue;
         }
 
@@ -3243,6 +3695,7 @@ int main (int argc, char **argv)
     ParameterSweepResult parameter_sweep_results[512];
     Stage4SuiteResult stage4_suite_results[8];
     Stage6SuiteNoteResult stage6_suite_results[16];
+    OrganVoicingNoteResult organ_voicing_results[16];
     Fdtd1DDesc solver_desc;
     Fdtd1DProbeDesc probe_descs[VERIFY_PROBE_COUNT];
     Fdtd1DSourceDesc source_descs[1];
@@ -3741,7 +4194,7 @@ int main (int argc, char **argv)
         };
         static const u32 STAGE6_NOTE_CELL_COUNTS[] =
         {
-            38, 34, 30, 29, 25, 23, 20, 19
+            38, 34, 30, 28, 25, 23, 20, 19
         };
         static const f64 STAGE6_SOURCE_RATIOS[] =
         {
@@ -3939,6 +4392,233 @@ int main (int argc, char **argv)
             ((voicing_pass_count == suite_count) && (ratio_pass_count == suite_count)) ? "pass" : "warn"
         );
         printf("\n");
+
+        return 0;
+    }
+
+    if (settings.run_organ_voicing_suite)
+    {
+        static const u32 ORGAN_SEMITONE_OFFSETS[] =
+        {
+            0, 2, 4, 5, 7, 9, 11, 12
+        };
+        static const u32 ORGAN_NOTE_CELL_COUNTS[] =
+        {
+            38, 34, 30, 28, 25, 23, 20, 19
+        };
+        static const f64 ORGAN_SOURCE_RATIOS[] =
+        {
+            28.0 / 128.0,
+            29.0 / 128.0,
+            30.0 / 128.0,
+            31.0 / 128.0,
+            32.0 / 128.0,
+            34.0 / 128.0,
+            34.0 / 128.0,
+            34.0 / 128.0
+        };
+        u32 note_index;
+        u32 suite_count;
+        f64 base_f0_hz;
+        f64 score_sum;
+        f64 score_min;
+        f64 score_max;
+        bool has_base_f0;
+
+        suite_count = 0;
+        base_f0_hz = 0.0;
+        score_sum = 0.0;
+        score_min = 1000.0;
+        score_max = -1000.0;
+        has_base_f0 = false;
+
+        for (note_index = 0; note_index < ARRAY_COUNT(ORGAN_SEMITONE_OFFSETS); note_index += 1)
+        {
+            VerificationSettings suite_settings;
+            OrganVoicingNoteResult *result;
+            u32 pressure_cell_count;
+            u32 source_cell_index;
+
+            if (suite_count >= ARRAY_COUNT(organ_voicing_results))
+            {
+                break;
+            }
+
+            pressure_cell_count = ORGAN_NOTE_CELL_COUNTS[note_index];
+            source_cell_index =
+                (u32) ((f64) pressure_cell_count * ORGAN_SOURCE_RATIOS[note_index] + 0.5);
+            if (source_cell_index >= pressure_cell_count)
+            {
+                source_cell_index = pressure_cell_count - 1;
+            }
+
+            suite_settings = settings;
+            suite_settings.run_organ_voicing_suite = false;
+            suite_settings.run_speech_analysis = true;
+            suite_settings.preset = VERIFICATION_PRESET_OPEN_RIGID;
+            suite_settings.excitation_type = VERIFICATION_EXCITATION_TYPE_JET_LABIUM;
+            suite_settings.probe_type = FDTD_1D_PROBE_TYPE_PRESSURE;
+            if (suite_settings.block_count < 512)
+            {
+                suite_settings.block_count = 512;
+            }
+            suite_settings.source_index_was_overridden = true;
+            suite_settings.source_cell_index = source_cell_index;
+            suite_settings.pressure_cell_count = pressure_cell_count;
+
+            if (RunVerification(&suite_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
+            {
+                return 1;
+            }
+
+            result = &organ_voicing_results[suite_count];
+            result->note_index = note_index;
+            result->semitone_offset = ORGAN_SEMITONE_OFFSETS[note_index];
+            result->pressure_cell_count = pressure_cell_count;
+            result->source_cell_index = source_cell_index;
+            result->measured_f0_hz = summary.mode_results[0].measured_peak_frequency_hz;
+            result->attack_10_to_90_ms =
+                summary.speech.attack_was_found ? summary.speech.attack_10_to_90_ms : -1.0;
+            result->settle_ms =
+                summary.speech.settling_was_found ? summary.speech.settling_time_ms : -1.0;
+            AnalyzeOrganBandRatios(
+                &capture,
+                &solver_desc,
+                0,
+                summary.sustained.late_start_frame,
+                summary.sustained.late_end_frame,
+                &result->low_band_ratio,
+                &result->mid_band_ratio,
+                &result->high_band_ratio
+            );
+            result->odd_even_balance_db = ComputeOddEvenBalanceDb(
+                &capture,
+                &solver_desc,
+                0,
+                summary.sustained.late_start_frame,
+                summary.sustained.late_end_frame,
+                result->measured_f0_hz
+            );
+            result->harmonic_to_noise_db = ComputeHarmonicToNoiseDb(
+                &capture,
+                &solver_desc,
+                0,
+                summary.sustained.late_start_frame,
+                summary.sustained.late_end_frame,
+                result->measured_f0_hz
+            );
+            if ((summary.sustained.late_dominant_frequency_a_hz > 0.0) &&
+                (summary.sustained.late_dominant_frequency_b_hz > 0.0))
+            {
+                result->f0_drift_cents = 1200.0 *
+                    log(summary.sustained.late_dominant_frequency_b_hz /
+                        summary.sustained.late_dominant_frequency_a_hz) / log(2.0);
+            }
+            else
+            {
+                result->f0_drift_cents = 0.0;
+            }
+            result->ratio_error_percent = 0.0;
+            result->voicing_score = 0.0;
+
+            if ((note_index == 0) && (result->measured_f0_hz > 0.0))
+            {
+                base_f0_hz = result->measured_f0_hz;
+                has_base_f0 = true;
+            }
+
+            suite_count += 1;
+            free(capture.samples);
+            capture.samples = NULL;
+        }
+
+        if (has_base_f0)
+        {
+            for (note_index = 0; note_index < suite_count; note_index += 1)
+            {
+                OrganVoicingNoteResult *result;
+                f64 expected_ratio;
+                f64 measured_ratio;
+
+                result = &organ_voicing_results[note_index];
+                expected_ratio = pow(2.0, (f64) result->semitone_offset / 12.0);
+                measured_ratio = result->measured_f0_hz / base_f0_hz;
+                result->ratio_error_percent =
+                    100.0 * (measured_ratio - expected_ratio) / expected_ratio;
+            }
+        }
+
+        for (note_index = 0; note_index < suite_count; note_index += 1)
+        {
+            OrganVoicingNoteResult *result;
+
+            result = &organ_voicing_results[note_index];
+            result->voicing_score = ComputeOrganVoicingScore(result);
+            score_sum += result->voicing_score;
+            if (result->voicing_score < score_min)
+            {
+                score_min = result->voicing_score;
+            }
+            if (result->voicing_score > score_max)
+            {
+                score_max = result->voicing_score;
+            }
+        }
+
+        printf("FDTD 1D Organ Voicing Suite (Report-Only)\n\n");
+        printf("Setup\n");
+        printf("  preset_family:          open-rigid\n");
+        printf("  excitation:             jet-labium\n");
+        printf("  block_count:            %u\n", settings.block_count < 512 ? 512 : settings.block_count);
+        printf("  notes_tested:           %u\n", suite_count);
+        printf("  semitone_offsets:       0,2,4,5,7,9,11,12\n");
+        printf("\n");
+        printf("Per-Note Metrics\n");
+        printf("  note  f0_hz    ratio_err%%  atk_ms   set_ms   low%%   mid%%   high%%  odd_even_db  hnr_db   drift_c  score\n");
+        for (note_index = 0; note_index < suite_count; note_index += 1)
+        {
+            OrganVoicingNoteResult *result;
+
+            result = &organ_voicing_results[note_index];
+            printf(
+                "  %-5u %-8.2f %-11.3f %-8.2f %-8.2f %-6.2f %-6.2f %-6.2f %-12.2f %-8.2f %-8.3f %-6.2f\n",
+                result->note_index,
+                result->measured_f0_hz,
+                result->ratio_error_percent,
+                result->attack_10_to_90_ms,
+                result->settle_ms,
+                100.0 * result->low_band_ratio,
+                100.0 * result->mid_band_ratio,
+                100.0 * result->high_band_ratio,
+                result->odd_even_balance_db,
+                result->harmonic_to_noise_db,
+                result->f0_drift_cents,
+                result->voicing_score
+            );
+        }
+        printf("\n");
+        printf("Score Summary\n");
+        printf("  mean_score:             %.2f\n",
+            (suite_count > 0) ? (score_sum / (f64) suite_count) : 0.0
+        );
+        printf("  min_score:              %.2f\n", (suite_count > 0) ? score_min : 0.0);
+        printf("  max_score:              %.2f\n", (suite_count > 0) ? score_max : 0.0);
+        printf("\n");
+        printf("Notes\n");
+        printf("  report_only:            yes\n");
+        printf("  guidance: compare trends across notes and presets; set gates only after stable baselines.\n");
+
+        if (settings.summary_csv_path != NULL)
+        {
+            if (WriteOrganVoicingSuiteCsv(settings.summary_csv_path, organ_voicing_results, suite_count))
+            {
+                printf("summary_csv_written=%s\n", settings.summary_csv_path);
+            }
+            else
+            {
+                printf("summary_csv_write_failed=%s\n", settings.summary_csv_path);
+            }
+        }
 
         return 0;
     }

@@ -40,10 +40,13 @@ typedef struct DebugGuiFrameDesc
     u32 source_coupling_mode_count;
     u32 active_output_extraction_mode;
     u32 output_extraction_mode_count;
+    u32 active_jet_profile;
+    u32 jet_profile_count;
     u32 preset_count;
     const char *const *excitation_mode_names;
     const char *const *source_coupling_mode_names;
     const char *const *output_extraction_mode_names;
+    const char *const *jet_profile_names;
     const char *const *preset_names;
     f64 delta_seconds;
 } DebugGuiFrameDesc;
@@ -57,6 +60,7 @@ typedef struct DebugGuiFrameActions
     bool request_select_excitation_mode;
     bool request_select_source_coupling_mode;
     bool request_select_output_extraction_mode;
+    bool request_select_jet_profile;
     bool request_select_preset;
     bool request_set_drive_amplitude;
     bool request_set_windchest_pressure;
@@ -73,6 +77,7 @@ typedef struct DebugGuiFrameActions
     u32 selected_excitation_mode;
     u32 selected_source_coupling_mode;
     u32 selected_output_extraction_mode;
+    u32 selected_jet_profile;
     u32 selected_preset_index;
     u32 source_cell_index;
     f32 drive_amplitude;

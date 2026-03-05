@@ -118,6 +118,10 @@ void Fdtd1DRenderSource_SetListenerLowpassCutoff (
     Fdtd1DRenderSource *source,
     f64 listener_lowpass_cutoff_hz
 );
+void Fdtd1DRenderSource_SetJetLabiumParameters (
+    Fdtd1DRenderSource *source,
+    const Fdtd1DJetLabiumParameters *parameters
+);
 void Fdtd1DRenderSource_RestartSpeech (Fdtd1DRenderSource *source);
 void Fdtd1DRenderSource_Render (
     void *user_data,

@@ -293,6 +293,7 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
     ASSERT(frame_desc->preset_names != nullptr);
     ASSERT(frame_desc->excitation_mode_names != nullptr);
     ASSERT(frame_desc->output_extraction_mode_names != nullptr);
+    ASSERT(frame_desc->jet_profile_names != nullptr);
 
     internal = (DebugGuiInternal *) gui->internal_state;
     ASSERT(internal != nullptr);
@@ -348,6 +349,20 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
             {
                 frame_actions->request_select_excitation_mode = true;
                 frame_actions->selected_excitation_mode = (u32) preset_index;
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Jet Profile");
+        for (preset_index = 0; preset_index < frame_desc->jet_profile_count; preset_index += 1)
+        {
+            bool is_selected;
+
+            is_selected = (preset_index == frame_desc->active_jet_profile);
+            if (ImGui::Selectable(frame_desc->jet_profile_names[preset_index], is_selected))
+            {
+                frame_actions->request_select_jet_profile = true;
+                frame_actions->selected_jet_profile = (u32) preset_index;
             }
         }
 
