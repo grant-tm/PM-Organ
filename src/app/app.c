@@ -253,9 +253,9 @@ static void BuildFdtdPresetDesc (
     render_source_desc->solver_desc.courant_number = TEST_COURANT_NUMBER;
     render_source_desc->solver_desc.uniform_area_m2 = 0.01;
     render_source_desc->solver_desc.uniform_loss = 0.00005;
-    render_source_desc->solver_desc.uniform_high_frequency_loss = 0.01;
+    render_source_desc->solver_desc.uniform_high_frequency_loss = 0.012;
     render_source_desc->solver_desc.uniform_boundary_loss = 0.00008;
-    render_source_desc->solver_desc.uniform_boundary_high_frequency_loss = 0.015;
+    render_source_desc->solver_desc.uniform_boundary_high_frequency_loss = 0.028;
     render_source_desc->solver_desc.area_loss_reference_m2 = render_source_desc->solver_desc.uniform_area_m2;
     render_source_desc->solver_desc.area_loss_strength = 0.35;
     render_source_desc->solver_desc.left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;

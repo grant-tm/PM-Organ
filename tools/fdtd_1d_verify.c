@@ -152,6 +152,10 @@ typedef struct VerificationSettings
     f64 nonlinear_mouth_feedback_scale_start;
     f64 nonlinear_mouth_feedback_scale_end;
     f64 nonlinear_mouth_feedback_scale_step;
+    f64 uniform_loss;
+    f64 uniform_high_frequency_loss;
+    f64 uniform_boundary_loss;
+    f64 uniform_boundary_high_frequency_loss;
     f64 area_loss_reference_m2;
     f64 area_loss_strength;
 } VerificationSettings;
@@ -436,10 +440,10 @@ static void ConfigureSolver (
     desc->velocity_cell_count = pressure_cell_count + 1;
     desc->courant_number = TEST_COURANT_NUMBER;
     desc->uniform_area_m2 = 0.01;
-    desc->uniform_loss = 0.00005;
-    desc->uniform_high_frequency_loss = 0.01;
-    desc->uniform_boundary_loss = 0.00008;
-    desc->uniform_boundary_high_frequency_loss = 0.015;
+    desc->uniform_loss = settings->uniform_loss;
+    desc->uniform_high_frequency_loss = settings->uniform_high_frequency_loss;
+    desc->uniform_boundary_loss = settings->uniform_boundary_loss;
+    desc->uniform_boundary_high_frequency_loss = settings->uniform_boundary_high_frequency_loss;
     desc->area_loss_reference_m2 = settings->area_loss_reference_m2;
     desc->area_loss_strength = settings->area_loss_strength;
     desc->area_segment_count = 0;
@@ -685,6 +689,10 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->nonlinear_mouth_feedback_scale_start = 0.5;
     settings->nonlinear_mouth_feedback_scale_end = 1.5;
     settings->nonlinear_mouth_feedback_scale_step = 0.25;
+    settings->uniform_loss = 0.00005;
+    settings->uniform_high_frequency_loss = 0.012;
+    settings->uniform_boundary_loss = 0.00008;
+    settings->uniform_boundary_high_frequency_loss = 0.028;
     settings->area_loss_reference_m2 = 0.01;
     settings->area_loss_strength = 0.35;
 }
@@ -702,6 +710,14 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         u32 parsed_value;
 
         argument = argv[argument_index];
+
+        if (_strnicmp(argument, "preset=", 7) == 0)
+        {
+            if (TryParsePresetName(argument + 7, &settings->preset))
+            {
+                continue;
+            }
+        }
 
         if (TryParsePresetName(argument, &settings->preset))
         {
@@ -869,6 +885,26 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         }
 
         if (TryParseDoubleValue(argument, "area_loss_strength=", &settings->area_loss_strength))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "uniform_loss=", &settings->uniform_loss))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "hf_loss=", &settings->uniform_high_frequency_loss))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "boundary_loss=", &settings->uniform_boundary_loss))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "boundary_hf_loss=", &settings->uniform_boundary_high_frequency_loss))
         {
             continue;
         }
@@ -1450,10 +1486,10 @@ static void ComputeHarmonicDecayMetrics (
     const SimulationOfflineCapture *capture,
     const Fdtd1DDesc *desc,
     u32 analysis_channel_index,
-    u32 early_start_frame,
-    u32 early_end_frame,
-    u32 late_start_frame,
-    u32 late_end_frame,
+    u32 window_a_start_frame,
+    u32 window_a_end_frame,
+    u32 window_b_start_frame,
+    u32 window_b_end_frame,
     f64 *low_band_db,
     f64 *high_band_db,
     f64 *slope_db_per_harmonic
@@ -1528,16 +1564,16 @@ static void ComputeHarmonicDecayMetrics (
         early_magnitude = ComputeSpectrumMagnitude(
             capture,
             analysis_channel_index,
-            early_start_frame,
-            early_end_frame,
+            window_a_start_frame,
+            window_a_end_frame,
             (f64) desc->sample_rate,
             frequency_hz
         );
         late_magnitude = ComputeSpectrumMagnitude(
             capture,
             analysis_channel_index,
-            late_start_frame,
-            late_end_frame,
+            window_b_start_frame,
+            window_b_end_frame,
             (f64) desc->sample_rate,
             frequency_hz
         );
@@ -1607,16 +1643,16 @@ static void ComputeHarmonicDecayMetrics (
             early_magnitude = ComputeSpectrumMagnitude(
                 capture,
                 analysis_channel_index,
-                early_start_frame,
-                early_end_frame,
+                window_a_start_frame,
+                window_a_end_frame,
                 (f64) desc->sample_rate,
                 frequency_hz
             );
             late_magnitude = ComputeSpectrumMagnitude(
                 capture,
                 analysis_channel_index,
-                late_start_frame,
-                late_end_frame,
+                window_b_start_frame,
+                window_b_end_frame,
                 (f64) desc->sample_rate,
                 frequency_hz
             );
@@ -1996,10 +2032,10 @@ static void AnalyzeSustainedBehavior (
         capture,
         desc,
         analysis_channel_index,
-        result->early_start_frame,
-        result->early_end_frame,
-        result->late_start_frame,
-        result->late_end_frame,
+        result->late_window_a_start_frame,
+        result->late_window_a_end_frame,
+        result->late_window_b_start_frame,
+        result->late_window_b_end_frame,
         &result->harmonic_decay_low_band_db,
         &result->harmonic_decay_high_band_db,
         &result->harmonic_decay_slope_db_per_harmonic
@@ -2838,13 +2874,13 @@ int main (int argc, char **argv)
     printf("  late_harmonic_ratio:    %.6f\n",
         summary.sustained.late_harmonic_energy_ratio
     );
-    printf("  harmonic_decay_low_db:  %.3f\n",
+    printf("  harmonic_late_delta_low_db:  %.3f\n",
         summary.sustained.harmonic_decay_low_band_db
     );
-    printf("  harmonic_decay_high_db: %.3f\n",
+    printf("  harmonic_late_delta_high_db: %.3f\n",
         summary.sustained.harmonic_decay_high_band_db
     );
-    printf("  harmonic_decay_slope:   %.3f dB/harmonic\n",
+    printf("  harmonic_late_delta_slope:   %.3f dB/harmonic\n",
         summary.sustained.harmonic_decay_slope_db_per_harmonic
     );
     printf("  late_spectral_flatness: %.6f\n",
