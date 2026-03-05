@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #include <windows.h>
 
@@ -57,6 +58,7 @@ typedef struct AppState
     AudioEngine audio_engine;
     DebugGui debug_gui;
     Fdtd1DRenderSource fdtd_render_sources[FDTD_PRESET_TYPE_COUNT];
+    Fdtd1DRenderSource rank_render_sources[8];
     FrameTimer frame_timer;
     Window main_window;
     TestToneSource test_tone_source;
@@ -79,7 +81,19 @@ typedef struct AppState
     bool previous_space_is_down;
     bool previous_toggle_is_down;
     bool previous_cycle_is_down;
+    bool rank_note_is_down[8];
+    bool previous_rank_note_is_down[8];
 } AppState;
+
+enum
+{
+    RANK_NOTE_COUNT = 8,
+};
+
+static const u32 RANK_NOTE_SEMITONE_OFFSETS[RANK_NOTE_COUNT] =
+{
+    0, 2, 4, 5, 7, 9, 11, 12,
+};
 
 static Fdtd1DOutputExtractionMode ToRenderSourceOutputExtractionMode (AppOutputExtractionMode app_mode)
 {
@@ -350,6 +364,213 @@ static void BuildFdtdPresetDesc (
         (*area_segment_count > 0) ? area_segment_descs : NULL;
 }
 
+static u32 RoundToMultipleU32 (u32 value, u32 multiple)
+{
+    if (multiple == 0)
+    {
+        return value;
+    }
+
+    return ((value + multiple - 1) / multiple) * multiple;
+}
+
+static void BuildRankVoiceDesc (
+    u32 rank_note_index,
+    const AudioEngineDesc *engine_desc,
+    Fdtd1DRenderSourceDesc *render_source_desc,
+    Fdtd1DProbeDesc *probe_descs,
+    Fdtd1DSourceDesc *source_descs
+)
+{
+    static const u32 BASE_PRESSURE_CELL_COUNT = 128;
+    static const f64 SOURCE_RATIO = 28.0 / 128.0;
+    static const f64 LEFT_PROBE_RATIO = 72.0 / 128.0;
+    static const f64 RIGHT_PROBE_RATIO = 104.0 / 128.0;
+    static const f64 TEST_COURANT_NUMBER = 0.9;
+    static const u32 CELL_ALIGNMENT = 8;
+    f64 dx;
+    f64 length_ratio;
+    u32 pressure_cell_count;
+    u32 source_cell_index;
+    u32 left_probe_index;
+    u32 right_probe_index;
+    Fdtd1DAreaSegmentDesc area_segment_descs[2];
+    u32 area_segment_count;
+
+    ASSERT(rank_note_index < RANK_NOTE_COUNT);
+    ASSERT(engine_desc != NULL);
+    ASSERT(render_source_desc != NULL);
+    ASSERT(probe_descs != NULL);
+    ASSERT(source_descs != NULL);
+
+    BuildFdtdPresetDesc(
+        FDTD_PRESET_TYPE_UNIFORM_STOPPED,
+        engine_desc,
+        render_source_desc,
+        probe_descs,
+        source_descs,
+        area_segment_descs,
+        &area_segment_count
+    );
+
+    length_ratio = pow(2.0, -(f64) RANK_NOTE_SEMITONE_OFFSETS[rank_note_index] / 12.0);
+    pressure_cell_count = (u32) ((f64) BASE_PRESSURE_CELL_COUNT * length_ratio + 0.5);
+    pressure_cell_count = RoundToMultipleU32(pressure_cell_count, CELL_ALIGNMENT);
+    if (pressure_cell_count < 48)
+    {
+        pressure_cell_count = 48;
+    }
+
+    dx = 343.0 / (TEST_COURANT_NUMBER * (f64) engine_desc->sample_rate);
+    source_cell_index = (u32) ((f64) pressure_cell_count * SOURCE_RATIO + 0.5);
+    left_probe_index = (u32) ((f64) pressure_cell_count * LEFT_PROBE_RATIO + 0.5);
+    right_probe_index = (u32) ((f64) pressure_cell_count * RIGHT_PROBE_RATIO + 0.5);
+
+    if (source_cell_index >= pressure_cell_count)
+    {
+        source_cell_index = pressure_cell_count - 1;
+    }
+    if (left_probe_index >= pressure_cell_count)
+    {
+        left_probe_index = pressure_cell_count - 1;
+    }
+    if (right_probe_index >= pressure_cell_count)
+    {
+        right_probe_index = pressure_cell_count - 1;
+    }
+
+    render_source_desc->solver_desc.pressure_cell_count = pressure_cell_count;
+    render_source_desc->solver_desc.velocity_cell_count = pressure_cell_count + 1;
+    render_source_desc->solver_desc.tube_length_m = (f64) pressure_cell_count * dx;
+    render_source_desc->solver_desc.dx = dx;
+    render_source_desc->solver_desc.area_segment_count = 0;
+    render_source_desc->solver_desc.area_segment_descs = NULL;
+    render_source_desc->solver_desc.left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
+    render_source_desc->solver_desc.left_boundary.reflection_coefficient = -1.0;
+    render_source_desc->solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;
+    render_source_desc->solver_desc.right_boundary.reflection_coefficient = 1.0;
+
+    probe_descs[0].cell_index = left_probe_index;
+    probe_descs[1].cell_index = right_probe_index;
+    probe_descs[2].cell_index = 0;
+    probe_descs[3].cell_index = 0;
+    probe_descs[4].cell_index = pressure_cell_count - 1;
+    probe_descs[5].cell_index = pressure_cell_count;
+
+    source_descs[0].cell_index = source_cell_index;
+    render_source_desc->startup_impulse_target_index = 0;
+}
+
+static bool AnyRankNoteIsDown (const AppState *app)
+{
+    u32 note_index;
+
+    ASSERT(app != NULL);
+
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        if (app->rank_note_is_down[note_index])
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void RenderRankVoices (
+    AppState *app,
+    f32 *output,
+    f32 *scratch_buffer,
+    u32 block_frame_count,
+    u32 channel_count,
+    u32 sample_rate
+)
+{
+    f32 mix_gain;
+    u32 active_note_count;
+    u32 note_index;
+    usize sample_count;
+    usize sample_index;
+
+    ASSERT(app != NULL);
+    ASSERT(output != NULL);
+    ASSERT(scratch_buffer != NULL);
+    ASSERT(block_frame_count > 0);
+    ASSERT(channel_count > 0);
+    ASSERT(sample_rate > 0);
+
+    sample_count = (usize) block_frame_count * (usize) channel_count;
+    memset(output, 0, sizeof(f32) * sample_count);
+
+    active_note_count = 0;
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        if (app->rank_note_is_down[note_index])
+        {
+            active_note_count += 1;
+        }
+    }
+
+    if (active_note_count == 0)
+    {
+        return;
+    }
+
+    mix_gain = 1.0f / sqrtf((f32) active_note_count);
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        if (app->rank_note_is_down[note_index] == false)
+        {
+            continue;
+        }
+
+        Fdtd1DRenderSource_Render(
+            &app->rank_render_sources[note_index],
+            scratch_buffer,
+            scratch_buffer,
+            block_frame_count,
+            channel_count,
+            sample_rate
+        );
+
+        for (sample_index = 0; sample_index < sample_count; sample_index += 1)
+        {
+            output[sample_index] += scratch_buffer[sample_index] * mix_gain;
+        }
+    }
+}
+
+static void RenderFdtdSource (
+    void *user_data,
+    f32 *output,
+    f32 *scratch_buffer,
+    u32 block_frame_count,
+    u32 channel_count,
+    u32 sample_rate
+)
+{
+    AppState *app;
+    usize sample_count;
+
+    ASSERT(user_data != NULL);
+    ASSERT(output != NULL);
+    ASSERT(scratch_buffer != NULL);
+    ASSERT(block_frame_count > 0);
+    ASSERT(channel_count > 0);
+    ASSERT(sample_rate > 0);
+
+    app = (AppState *) user_data;
+    sample_count = (usize) block_frame_count * (usize) channel_count;
+    if (AnyRankNoteIsDown(app))
+    {
+        RenderRankVoices(app, output, scratch_buffer, block_frame_count, channel_count, sample_rate);
+        return;
+    }
+    memset(output, 0, sizeof(f32) * sample_count);
+    memset(scratch_buffer, 0, sizeof(f32) * sample_count);
+}
+
 static void SetActiveRenderSource (AppState *app, bool use_fdtd_source)
 {
     ASSERT(app != NULL);
@@ -358,8 +579,8 @@ static void SetActiveRenderSource (AppState *app, bool use_fdtd_source)
     {
         AudioEngine_SetRenderSource(
             &app->audio_engine,
-            Fdtd1DRenderSource_Render,
-            &app->fdtd_render_sources[app->active_fdtd_preset]
+            RenderFdtdSource,
+            app
         );
     }
     else
@@ -373,6 +594,7 @@ static void SetActiveRenderSource (AppState *app, bool use_fdtd_source)
 
 static void ApplyOutputExtractionModeToSources (AppState *app)
 {
+    u32 note_index;
     FdtdPresetType preset_type;
 
     ASSERT(app != NULL);
@@ -384,10 +606,19 @@ static void ApplyOutputExtractionModeToSources (AppState *app)
             ToRenderSourceOutputExtractionMode(app->active_output_extraction_mode)
         );
     }
+
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        Fdtd1DRenderSource_SetOutputExtractionMode(
+            &app->rank_render_sources[note_index],
+            ToRenderSourceOutputExtractionMode(app->active_output_extraction_mode)
+        );
+    }
 }
 
 static void ApplyExcitationSettingsToSources (AppState *app)
 {
+    u32 note_index;
     FdtdPresetType preset_type;
 
     ASSERT(app != NULL);
@@ -423,10 +654,43 @@ static void ApplyExcitationSettingsToSources (AppState *app)
             (f64) app->speech_chiff_decay_seconds
         );
     }
+
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        Fdtd1DRenderSource_SetExcitationMode(
+            &app->rank_render_sources[note_index],
+            ToRenderSourceExcitationMode(app->active_excitation_mode)
+        );
+        Fdtd1DRenderSource_SetSourceCouplingMode(
+            &app->rank_render_sources[note_index],
+            ToRenderSourceSourceCouplingMode(app->active_source_coupling_mode)
+        );
+        Fdtd1DRenderSource_SetDriveAmplitude(
+            &app->rank_render_sources[note_index],
+            (f64) app->drive_amplitude
+        );
+        Fdtd1DRenderSource_SetWindchestPressure(
+            &app->rank_render_sources[note_index],
+            (f64) app->windchest_pressure
+        );
+        Fdtd1DRenderSource_SetSpeechAttackSeconds(
+            &app->rank_render_sources[note_index],
+            (f64) app->speech_attack_seconds
+        );
+        Fdtd1DRenderSource_SetSpeechChiffAmount(
+            &app->rank_render_sources[note_index],
+            (f64) app->speech_chiff_amount
+        );
+        Fdtd1DRenderSource_SetSpeechChiffDecaySeconds(
+            &app->rank_render_sources[note_index],
+            (f64) app->speech_chiff_decay_seconds
+        );
+    }
 }
 
 static void ApplyListenerSettingsToSources (AppState *app)
 {
+    u32 note_index;
     FdtdPresetType preset_type;
 
     ASSERT(app != NULL);
@@ -450,10 +714,31 @@ static void ApplyListenerSettingsToSources (AppState *app)
             (f64) app->listener_lowpass_cutoff_hz
         );
     }
+
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        Fdtd1DRenderSource_SetListenerDistance(
+            &app->rank_render_sources[note_index],
+            (f64) app->listener_distance_m
+        );
+        Fdtd1DRenderSource_SetListenerMouthPressureMix(
+            &app->rank_render_sources[note_index],
+            (f64) app->listener_mouth_pressure_mix
+        );
+        Fdtd1DRenderSource_SetListenerCrossfeed(
+            &app->rank_render_sources[note_index],
+            (f64) app->listener_crossfeed
+        );
+        Fdtd1DRenderSource_SetListenerLowpassCutoff(
+            &app->rank_render_sources[note_index],
+            (f64) app->listener_lowpass_cutoff_hz
+        );
+    }
 }
 
 static void RestartSpeechForAllSources (AppState *app)
 {
+    u32 note_index;
     FdtdPresetType preset_type;
 
     ASSERT(app != NULL);
@@ -461,6 +746,11 @@ static void RestartSpeechForAllSources (AppState *app)
     for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
     {
         Fdtd1DRenderSource_RestartSpeech(&app->fdtd_render_sources[preset_type]);
+    }
+
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        Fdtd1DRenderSource_RestartSpeech(&app->rank_render_sources[note_index]);
     }
 }
 
@@ -473,8 +763,8 @@ static void CycleFdtdPreset (AppState *app)
     {
         AudioEngine_SetRenderSource(
             &app->audio_engine,
-            Fdtd1DRenderSource_Render,
-            &app->fdtd_render_sources[app->active_fdtd_preset]
+            RenderFdtdSource,
+            app
         );
     }
 
@@ -492,8 +782,8 @@ static void SelectFdtdPreset (AppState *app, FdtdPresetType preset_type)
     {
         AudioEngine_SetRenderSource(
             &app->audio_engine,
-            Fdtd1DRenderSource_Render,
-            &app->fdtd_render_sources[app->active_fdtd_preset]
+            RenderFdtdSource,
+            app
         );
     }
 
@@ -711,7 +1001,12 @@ static void SetListenerLowpassCutoff (AppState *app, f32 listener_lowpass_cutoff
 
 static void UpdateDebugInput (AppState *app)
 {
+    static const i32 RANK_NOTE_KEYS[RANK_NOTE_COUNT] =
+    {
+        'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K'
+    };
     bool cycle_is_down;
+    u32 note_index;
     bool space_is_down;
     bool toggle_is_down;
 
@@ -719,7 +1014,7 @@ static void UpdateDebugInput (AppState *app)
 
     space_is_down = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
     toggle_is_down = (GetAsyncKeyState('T') & 0x8000) != 0;
-    cycle_is_down = (GetAsyncKeyState('G') & 0x8000) != 0;
+    cycle_is_down = false;
 
     if (space_is_down && (app->previous_space_is_down == false))
     {
@@ -731,9 +1026,21 @@ static void UpdateDebugInput (AppState *app)
         SetActiveRenderSource(app, app->fdtd_source_is_active == false);
     }
 
-    if (cycle_is_down && (app->previous_cycle_is_down == false))
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
     {
-        CycleFdtdPreset(app);
+        bool note_is_down;
+
+        note_is_down = (GetAsyncKeyState(RANK_NOTE_KEYS[note_index]) & 0x8000) != 0;
+        app->rank_note_is_down[note_index] = note_is_down;
+        if (note_is_down && (app->previous_rank_note_is_down[note_index] == false))
+        {
+            Fdtd1DRenderSource_RestartSpeech(&app->rank_render_sources[note_index]);
+            if (app->active_excitation_mode == APP_EXCITATION_MODE_IMPULSE)
+            {
+                Fdtd1DRenderSource_TriggerStartupImpulse(&app->rank_render_sources[note_index]);
+            }
+        }
+        app->previous_rank_note_is_down[note_index] = note_is_down;
     }
 
     app->previous_space_is_down = space_is_down;
@@ -859,11 +1166,54 @@ int App_Run (void)
         }
     }
 
+    for (u32 rank_note_index = 0; rank_note_index < RANK_NOTE_COUNT; rank_note_index += 1)
+    {
+        Fdtd1DProbeDesc probe_descs[8];
+        Fdtd1DRenderSourceDesc fdtd_render_source_desc;
+        Fdtd1DSourceDesc source_descs[1];
+
+        BuildRankVoiceDesc(
+            rank_note_index,
+            &engine_desc,
+            &fdtd_render_source_desc,
+            probe_descs,
+            source_descs
+        );
+
+        if (Fdtd1DRenderSource_Initialize(
+            &app->rank_render_sources[rank_note_index],
+            &bootstrap_arena,
+            &fdtd_render_source_desc
+        ) == false)
+        {
+            for (u32 shutdown_rank_note_index = 0;
+                 shutdown_rank_note_index < rank_note_index;
+                 shutdown_rank_note_index += 1)
+            {
+                Fdtd1DRenderSource_Shutdown(&app->rank_render_sources[shutdown_rank_note_index]);
+            }
+            for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+            {
+                Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type]);
+            }
+
+            DebugGui_Shutdown(&app->debug_gui);
+            AudioEngine_Shutdown(&app->audio_engine);
+            PlatformWindow_Destroy(&app->main_window);
+            MemoryArena_Destroy(&bootstrap_arena);
+            return 1;
+        }
+    }
+
     test_tone_desc.frequency_hz = 220.0;
     test_tone_desc.amplitude = 0.05f;
 
     if (TestToneSource_Initialize(&app->test_tone_source, &test_tone_desc) == false)
     {
+        for (u32 rank_note_index = 0; rank_note_index < RANK_NOTE_COUNT; rank_note_index += 1)
+        {
+            Fdtd1DRenderSource_Shutdown(&app->rank_render_sources[rank_note_index]);
+        }
         for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
         {
             Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type]);
@@ -878,6 +1228,8 @@ int App_Run (void)
     app->previous_space_is_down = false;
     app->previous_toggle_is_down = false;
     app->previous_cycle_is_down = false;
+    memset(app->rank_note_is_down, 0, sizeof(app->rank_note_is_down));
+    memset(app->previous_rank_note_is_down, 0, sizeof(app->previous_rank_note_is_down));
     app->active_fdtd_preset = FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED;
     app->active_excitation_mode = APP_EXCITATION_MODE_IMPULSE;
     app->active_source_coupling_mode = APP_SOURCE_COUPLING_MODE_PRESSURE;
@@ -909,6 +1261,10 @@ int App_Run (void)
 
     if (AudioDevice_Open(&app->audio_device, &bootstrap_arena, &audio_desc) == false)
     {
+        for (u32 rank_note_index = 0; rank_note_index < RANK_NOTE_COUNT; rank_note_index += 1)
+        {
+            Fdtd1DRenderSource_Shutdown(&app->rank_render_sources[rank_note_index]);
+        }
         DebugGui_Shutdown(&app->debug_gui);
         PlatformWindow_Destroy(&app->main_window);
         MemoryArena_Destroy(&bootstrap_arena);
@@ -918,6 +1274,10 @@ int App_Run (void)
     if (AudioDevice_Start(&app->audio_device) == false)
     {
         AudioDevice_Close(&app->audio_device);
+        for (u32 rank_note_index = 0; rank_note_index < RANK_NOTE_COUNT; rank_note_index += 1)
+        {
+            Fdtd1DRenderSource_Shutdown(&app->rank_render_sources[rank_note_index]);
+        }
         DebugGui_Shutdown(&app->debug_gui);
         PlatformWindow_Destroy(&app->main_window);
         MemoryArena_Destroy(&bootstrap_arena);
@@ -1102,6 +1462,10 @@ int App_Run (void)
     for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
     {
         Fdtd1DRenderSource_Shutdown(&app->fdtd_render_sources[preset_type]);
+    }
+    for (u32 rank_note_index = 0; rank_note_index < RANK_NOTE_COUNT; rank_note_index += 1)
+    {
+        Fdtd1DRenderSource_Shutdown(&app->rank_render_sources[rank_note_index]);
     }
     AudioEngine_Shutdown(&app->audio_engine);
     PlatformWindow_Destroy(&app->main_window);

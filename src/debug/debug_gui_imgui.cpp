@@ -500,7 +500,7 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
             frame_desc->delta_seconds * 1000.0,
             (frame_desc->delta_seconds > 0.0) ? (1.0 / frame_desc->delta_seconds) : 0.0
         );
-        ImGui::Text("Hotkeys: Space retrigger, T source, G preset");
+        ImGui::Text("Hotkeys: Space retrigger, T source, A..K notes");
     }
     ImGui::End();
 }
