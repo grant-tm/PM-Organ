@@ -140,7 +140,10 @@ typedef struct VerificationSettings
     bool right_probe_index_was_overridden;
     bool run_length_sweep;
     bool run_nonlinear_mouth_sweep;
+    bool run_parameter_sweep;
+    bool run_stage4_suite;
     bool run_speech_analysis;
+    const char *summary_csv_path;
     u32 block_count;
     u32 length_sweep_start_cell_count;
     u32 length_sweep_end_cell_count;
@@ -160,6 +163,18 @@ typedef struct VerificationSettings
     f64 area_loss_strength;
     f64 open_end_correction_coefficient;
     f64 open_end_radiation_resistance_scale;
+    f64 sweep_open_end_correction_start;
+    f64 sweep_open_end_correction_end;
+    f64 sweep_open_end_correction_step;
+    f64 sweep_open_end_radiation_start;
+    f64 sweep_open_end_radiation_end;
+    f64 sweep_open_end_radiation_step;
+    f64 sweep_source_feedback_scale_start;
+    f64 sweep_source_feedback_scale_end;
+    f64 sweep_source_feedback_scale_step;
+    f64 sweep_boundary_hf_loss_start;
+    f64 sweep_boundary_hf_loss_end;
+    f64 sweep_boundary_hf_loss_step;
 } VerificationSettings;
 
 typedef struct VerificationRunSummary
@@ -178,6 +193,12 @@ typedef struct VerificationRunSummary
     f64 modal_spacing_mean_error_percent;
     f64 modal_spacing_max_error_percent;
     bool modal_spacing_gate_ok;
+    f64 fundamental_pitch_error_cents;
+    f64 fundamental_pitch_error_percent;
+    bool fundamental_pitch_gate_ok;
+    f64 harmonic_ratio_mean_error_percent;
+    f64 harmonic_ratio_max_error_percent;
+    bool harmonic_ratio_gate_ok;
     u32 pressure_cell_count;
     f64 tube_length_m;
 } VerificationRunSummary;
@@ -210,6 +231,45 @@ typedef struct NonlinearMouthSweepResult
     bool energy_drift_ok;
     bool is_stable_candidate;
 } NonlinearMouthSweepResult;
+
+typedef struct ParameterSweepResult
+{
+    f64 open_end_correction_coefficient;
+    f64 open_end_radiation_resistance_scale;
+    f64 source_feedback_scale;
+    f64 boundary_hf_loss;
+    f64 f0_error_cents;
+    f64 f0_error_percent;
+    f64 harmonic_ratio_max_error_percent;
+    f64 modal_spacing_max_error_percent;
+    f64 dominant_frequency_drift_ratio;
+    f64 energy_drift;
+    bool f0_pitch_gate_ok;
+    bool harmonic_ratio_gate_ok;
+    bool modal_spacing_gate_ok;
+    bool boundary_left_activity_gate_ok;
+    bool boundary_right_activity_gate_ok;
+    bool dominant_frequency_drift_gate_ok;
+    bool energy_drift_gate_ok;
+    bool overall_gate_ok;
+} ParameterSweepResult;
+
+typedef struct Stage4SuiteResult
+{
+    VerificationPreset preset;
+    f64 f0_error_cents;
+    f64 harmonic_ratio_max_error_percent;
+    f64 modal_spacing_max_error_percent;
+    f64 dominant_frequency_drift_ratio;
+    f64 energy_drift;
+    bool boundary_left_activity_gate_ok;
+    bool boundary_right_activity_gate_ok;
+    bool harmonic_ratio_gate_ok;
+    bool modal_spacing_gate_ok;
+    bool dominant_frequency_drift_gate_ok;
+    bool energy_drift_gate_ok;
+    bool overall_core_gate_ok;
+} Stage4SuiteResult;
 
 static const char *GetProbeTypeName (Fdtd1DProbeType probe_type)
 {
@@ -357,6 +417,12 @@ static bool EvaluateBoundaryEmissionActivityGate (Fdtd1DBoundaryType boundary_ty
     }
 
     return emission_rms <= NON_OPEN_BOUNDARY_MAX_RMS;
+}
+
+static bool EvaluateFundamentalPitchGate (f64 pitch_error_cents)
+{
+    static const f64 MAX_ABS_PITCH_ERROR_CENTS = 25.0;
+    return fabs(pitch_error_cents) <= MAX_ABS_PITCH_ERROR_CENTS;
 }
 
 static bool EvaluateSpeechOnsetToPeakGate (f64 onset_to_peak_ms)
@@ -717,7 +783,10 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->right_probe_index_was_overridden = false;
     settings->run_length_sweep = false;
     settings->run_nonlinear_mouth_sweep = false;
+    settings->run_parameter_sweep = false;
+    settings->run_stage4_suite = false;
     settings->run_speech_analysis = false;
+    settings->summary_csv_path = NULL;
     settings->block_count = 256;
     settings->length_sweep_start_cell_count = 64;
     settings->length_sweep_end_cell_count = 256;
@@ -737,6 +806,18 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->area_loss_strength = 0.35;
     settings->open_end_correction_coefficient = 0.45;
     settings->open_end_radiation_resistance_scale = 1.5;
+    settings->sweep_open_end_correction_start = settings->open_end_correction_coefficient;
+    settings->sweep_open_end_correction_end = settings->open_end_correction_coefficient;
+    settings->sweep_open_end_correction_step = 0.05;
+    settings->sweep_open_end_radiation_start = settings->open_end_radiation_resistance_scale;
+    settings->sweep_open_end_radiation_end = settings->open_end_radiation_resistance_scale;
+    settings->sweep_open_end_radiation_step = 0.25;
+    settings->sweep_source_feedback_scale_start = 1.0;
+    settings->sweep_source_feedback_scale_end = 1.0;
+    settings->sweep_source_feedback_scale_step = 0.25;
+    settings->sweep_boundary_hf_loss_start = settings->uniform_boundary_high_frequency_loss;
+    settings->sweep_boundary_hf_loss_end = settings->uniform_boundary_high_frequency_loss;
+    settings->sweep_boundary_hf_loss_step = 0.004;
 }
 
 static void ParseArguments (int argc, char **argv, VerificationSettings *settings)
@@ -857,6 +938,18 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
             continue;
         }
 
+        if ((_stricmp(argument, "param-sweep") == 0) || (_stricmp(argument, "sweep-param") == 0))
+        {
+            settings->run_parameter_sweep = true;
+            continue;
+        }
+
+        if ((_stricmp(argument, "stage4-suite") == 0) || (_stricmp(argument, "suite-stage4") == 0))
+        {
+            settings->run_stage4_suite = true;
+            continue;
+        }
+
         if ((_stricmp(argument, "speech-analysis") == 0) || (_stricmp(argument, "speech") == 0))
         {
             settings->run_speech_analysis = true;
@@ -929,6 +1022,66 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
             continue;
         }
 
+        if (TryParseDoubleValue(argument, "corr_start=", &settings->sweep_open_end_correction_start))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "corr_end=", &settings->sweep_open_end_correction_end))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "corr_step=", &settings->sweep_open_end_correction_step))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "rad_start=", &settings->sweep_open_end_radiation_start))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "rad_end=", &settings->sweep_open_end_radiation_end))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "rad_step=", &settings->sweep_open_end_radiation_step))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "source_fb_start=", &settings->sweep_source_feedback_scale_start))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "source_fb_end=", &settings->sweep_source_feedback_scale_end))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "source_fb_step=", &settings->sweep_source_feedback_scale_step))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "bhf_start=", &settings->sweep_boundary_hf_loss_start))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "bhf_end=", &settings->sweep_boundary_hf_loss_end))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "bhf_step=", &settings->sweep_boundary_hf_loss_step))
+        {
+            continue;
+        }
+
         if (TryParseDoubleValue(argument, "area_loss_reference=", &settings->area_loss_reference_m2))
         {
             continue;
@@ -973,6 +1126,12 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
             continue;
         }
 
+        if (_strnicmp(argument, "summary_csv=", 12) == 0)
+        {
+            settings->summary_csv_path = argument + 12;
+            continue;
+        }
+
         settings->csv_output_path = argument;
     }
 
@@ -983,6 +1142,22 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
     if (settings->nonlinear_mouth_feedback_scale_step <= 0.0)
     {
         settings->nonlinear_mouth_feedback_scale_step = 0.25;
+    }
+    if (settings->sweep_open_end_correction_step <= 0.0)
+    {
+        settings->sweep_open_end_correction_step = 0.05;
+    }
+    if (settings->sweep_open_end_radiation_step <= 0.0)
+    {
+        settings->sweep_open_end_radiation_step = 0.25;
+    }
+    if (settings->sweep_source_feedback_scale_step <= 0.0)
+    {
+        settings->sweep_source_feedback_scale_step = 0.25;
+    }
+    if (settings->sweep_boundary_hf_loss_step <= 0.0)
+    {
+        settings->sweep_boundary_hf_loss_step = 0.004;
     }
 }
 
@@ -1027,6 +1202,118 @@ static bool WriteCaptureCsv (const char *path, const SimulationOfflineCapture *c
         }
 
         fprintf(file, "\n");
+    }
+
+    fclose(file);
+    return true;
+}
+
+static bool WriteParameterSweepCsv (
+    const char *path,
+    const ParameterSweepResult *results,
+    u32 result_count
+)
+{
+    FILE *file;
+    u32 result_index;
+
+    ASSERT(path != NULL);
+    ASSERT(results != NULL);
+
+    file = NULL;
+    if (fopen_s(&file, path, "w") != 0)
+    {
+        return false;
+    }
+
+    fprintf(
+        file,
+        "open_end_correction,open_end_radiation_resistance,source_feedback_scale,"
+        "boundary_hf_loss,f0_error_cents,f0_error_percent,harmonic_ratio_max_error_percent,modal_spacing_max_error_percent,"
+        "dominant_frequency_drift_ratio,energy_drift,f0_pitch_gate,harmonic_ratio_gate,modal_spacing_gate,"
+        "boundary_left_activity_gate,boundary_right_activity_gate,freq_drift_gate,energy_drift_gate,overall_gate\n"
+    );
+
+    for (result_index = 0; result_index < result_count; result_index += 1)
+    {
+        const ParameterSweepResult *result;
+
+        result = &results[result_index];
+        fprintf(
+            file,
+            "%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%s,%s,%s,%s,%s,%s,%s,%s\n",
+            result->open_end_correction_coefficient,
+            result->open_end_radiation_resistance_scale,
+            result->source_feedback_scale,
+            result->boundary_hf_loss,
+            result->f0_error_cents,
+            result->f0_error_percent,
+            result->harmonic_ratio_max_error_percent,
+            result->modal_spacing_max_error_percent,
+            result->dominant_frequency_drift_ratio,
+            result->energy_drift,
+            result->f0_pitch_gate_ok ? "pass" : "warn",
+            result->harmonic_ratio_gate_ok ? "pass" : "warn",
+            result->modal_spacing_gate_ok ? "pass" : "warn",
+            result->boundary_left_activity_gate_ok ? "pass" : "warn",
+            result->boundary_right_activity_gate_ok ? "pass" : "warn",
+            result->dominant_frequency_drift_gate_ok ? "pass" : "fail",
+            result->energy_drift_gate_ok ? "pass" : "fail",
+            result->overall_gate_ok ? "pass" : "fail"
+        );
+    }
+
+    fclose(file);
+    return true;
+}
+
+static bool WriteStage4SuiteCsv (
+    const char *path,
+    const Stage4SuiteResult *results,
+    u32 result_count
+)
+{
+    FILE *file;
+    u32 result_index;
+
+    ASSERT(path != NULL);
+    ASSERT(results != NULL);
+
+    file = NULL;
+    if (fopen_s(&file, path, "w") != 0)
+    {
+        return false;
+    }
+
+    fprintf(
+        file,
+        "preset,f0_error_cents,harmonic_ratio_max_error_percent,modal_spacing_max_error_percent,"
+        "dominant_frequency_drift_ratio,energy_drift,boundary_left_activity_gate,boundary_right_activity_gate,"
+        "harmonic_ratio_gate,modal_spacing_gate,freq_drift_gate,energy_drift_gate,overall_core_gate\n"
+    );
+
+    for (result_index = 0; result_index < result_count; result_index += 1)
+    {
+        const Stage4SuiteResult *result;
+
+        result = &results[result_index];
+        fprintf(
+            file,
+            "%s,%.9f,%.9f,%.9f,%.9f,%.9f,%s,%s,%s,%s,%s,%s,%s\n",
+            GetPresetName(result->preset),
+            result->f0_error_cents,
+            result->harmonic_ratio_max_error_percent,
+            result->modal_spacing_max_error_percent,
+            result->dominant_frequency_drift_ratio,
+            result->energy_drift,
+            result->boundary_left_activity_gate_ok ? "pass" : "warn",
+            result->boundary_right_activity_gate_ok ? "pass" : "warn",
+            result->harmonic_ratio_gate_ok ? "pass" : "warn",
+            result->modal_spacing_gate_ok ? "pass" : "warn",
+            result->dominant_frequency_drift_gate_ok ? "pass" : "fail",
+            result->energy_drift_gate_ok ? "pass" : "fail",
+            result->overall_core_gate_ok ? "pass" : "fail"
+        );
     }
 
     fclose(file);
@@ -2280,6 +2567,79 @@ static void AnalyzeModalSpacing (
     *gate_ok = (*max_error_percent <= max_mode_spacing_error_percent);
 }
 
+static void AnalyzeHarmonicRatios (
+    const Fdtd1DDesc *desc,
+    const ModeResult *mode_results,
+    u32 mode_count,
+    f64 *mean_error_percent,
+    f64 *max_error_percent,
+    bool *gate_ok
+)
+{
+    f64 max_ratio_error_percent;
+    f64 error_sum_percent;
+    f64 max_error_local_percent;
+    f64 fundamental_measured_hz;
+    u32 mode_index;
+    u32 error_count;
+
+    ASSERT(desc != NULL);
+    ASSERT(mode_results != NULL);
+    ASSERT(mean_error_percent != NULL);
+    ASSERT(max_error_percent != NULL);
+    ASSERT(gate_ok != NULL);
+
+    *mean_error_percent = 0.0;
+    *max_error_percent = 0.0;
+    *gate_ok = false;
+
+    if (mode_count < 2)
+    {
+        return;
+    }
+
+    max_ratio_error_percent = (desc->area_segment_count > 0) ? 12.0 : 6.0;
+    fundamental_measured_hz = mode_results[0].measured_peak_frequency_hz;
+    if (fundamental_measured_hz <= 0.0)
+    {
+        return;
+    }
+
+    error_sum_percent = 0.0;
+    max_error_local_percent = 0.0;
+    error_count = 0;
+    for (mode_index = 1; mode_index < mode_count; mode_index += 1)
+    {
+        f64 expected_ratio;
+        f64 measured_ratio;
+        f64 ratio_error_percent;
+
+        if (mode_results[mode_index].measured_peak_frequency_hz <= 0.0)
+        {
+            continue;
+        }
+
+        expected_ratio = GetExpectedModeMultiplier(desc, mode_index) / GetExpectedModeMultiplier(desc, 0);
+        measured_ratio = mode_results[mode_index].measured_peak_frequency_hz / fundamental_measured_hz;
+        ratio_error_percent = 100.0 * fabs(measured_ratio - expected_ratio) / expected_ratio;
+        error_sum_percent += ratio_error_percent;
+        if (ratio_error_percent > max_error_local_percent)
+        {
+            max_error_local_percent = ratio_error_percent;
+        }
+        error_count += 1;
+    }
+
+    if (error_count == 0)
+    {
+        return;
+    }
+
+    *mean_error_percent = error_sum_percent / (f64) error_count;
+    *max_error_percent = max_error_local_percent;
+    *gate_ok = (*max_error_percent <= max_ratio_error_percent);
+}
+
 static f64 ComputeStateEnergy (const Fdtd1DState *state)
 {
     f64 energy;
@@ -2488,6 +2848,33 @@ static bool RunVerification (
         &summary->modal_spacing_max_error_percent,
         &summary->modal_spacing_gate_ok
     );
+    AnalyzeHarmonicRatios(
+        solver_desc,
+        summary->mode_results,
+        MODE_COUNT,
+        &summary->harmonic_ratio_mean_error_percent,
+        &summary->harmonic_ratio_max_error_percent,
+        &summary->harmonic_ratio_gate_ok
+    );
+    if (summary->mode_results[0].expected_frequency_hz > 0.0)
+    {
+        f64 measured_f0;
+        f64 expected_f0;
+        f64 ratio;
+
+        measured_f0 = summary->mode_results[0].measured_peak_frequency_hz;
+        expected_f0 = summary->mode_results[0].expected_frequency_hz;
+        summary->fundamental_pitch_error_percent =
+            100.0 * (measured_f0 - expected_f0) / expected_f0;
+        ratio = measured_f0 / expected_f0;
+        if (ratio > 0.0)
+        {
+            summary->fundamental_pitch_error_cents = 1200.0 * log(ratio) / log(2.0);
+        }
+        summary->fundamental_pitch_gate_ok = EvaluateFundamentalPitchGate(
+            summary->fundamental_pitch_error_cents
+        );
+    }
     AnalyzeSustainedBehavior(capture, solver_desc, 0, &summary->sustained);
     AnalyzeSpeechBehavior(capture, solver_desc, 0, &summary->speech);
 
@@ -2548,6 +2935,8 @@ int main (int argc, char **argv)
     VerificationRunSummary summary;
     LengthSweepResult sweep_results[32];
     NonlinearMouthSweepResult nonlinear_mouth_sweep_results[32];
+    ParameterSweepResult parameter_sweep_results[512];
+    Stage4SuiteResult stage4_suite_results[8];
     Fdtd1DDesc solver_desc;
     Fdtd1DProbeDesc probe_descs[2];
     Fdtd1DSourceDesc source_descs[1];
@@ -2754,6 +3143,274 @@ int main (int argc, char **argv)
                 nonlinear_mouth_sweep_results[block_index].energy_drift,
                 nonlinear_mouth_sweep_results[block_index].is_stable_candidate ? "yes" : "no"
             );
+        }
+
+        return 0;
+    }
+
+    if (settings.run_parameter_sweep)
+    {
+        f64 correction_value;
+        f64 radiation_value;
+        f64 source_feedback_scale;
+        f64 boundary_hf_loss_value;
+        u32 pass_count;
+
+        sweep_result_count = 0;
+        pass_count = 0;
+
+        for (correction_value = settings.sweep_open_end_correction_start;
+             correction_value <= (settings.sweep_open_end_correction_end + 0.5 * settings.sweep_open_end_correction_step);
+             correction_value += settings.sweep_open_end_correction_step)
+        {
+            for (radiation_value = settings.sweep_open_end_radiation_start;
+                 radiation_value <= (settings.sweep_open_end_radiation_end + 0.5 * settings.sweep_open_end_radiation_step);
+                 radiation_value += settings.sweep_open_end_radiation_step)
+            {
+                for (source_feedback_scale = settings.sweep_source_feedback_scale_start;
+                     source_feedback_scale <= (settings.sweep_source_feedback_scale_end + 0.5 * settings.sweep_source_feedback_scale_step);
+                     source_feedback_scale += settings.sweep_source_feedback_scale_step)
+                {
+                    for (boundary_hf_loss_value = settings.sweep_boundary_hf_loss_start;
+                         boundary_hf_loss_value <= (settings.sweep_boundary_hf_loss_end + 0.5 * settings.sweep_boundary_hf_loss_step);
+                         boundary_hf_loss_value += settings.sweep_boundary_hf_loss_step)
+                    {
+                        VerificationSettings sweep_settings;
+                        ParameterSweepResult *result;
+
+                        if (sweep_result_count >= ARRAY_COUNT(parameter_sweep_results))
+                        {
+                            break;
+                        }
+
+                        sweep_settings = settings;
+                        sweep_settings.run_parameter_sweep = false;
+                        sweep_settings.open_end_correction_coefficient = correction_value;
+                        sweep_settings.open_end_radiation_resistance_scale = radiation_value;
+                        sweep_settings.uniform_boundary_high_frequency_loss = boundary_hf_loss_value;
+                        sweep_settings.excitation_type = VERIFICATION_EXCITATION_TYPE_NONLINEAR_MOUTH;
+                        sweep_settings.nonlinear_mouth_parameters.pressure_feedback =
+                            settings.nonlinear_mouth_parameters.pressure_feedback * (f32) source_feedback_scale;
+                        sweep_settings.nonlinear_mouth_parameters.velocity_feedback =
+                            settings.nonlinear_mouth_parameters.velocity_feedback * (f32) source_feedback_scale;
+
+                        if (RunVerification(&sweep_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
+                        {
+                            return 1;
+                        }
+
+                        result = &parameter_sweep_results[sweep_result_count];
+                        result->open_end_correction_coefficient = correction_value;
+                        result->open_end_radiation_resistance_scale = radiation_value;
+                        result->source_feedback_scale = source_feedback_scale;
+                        result->boundary_hf_loss = boundary_hf_loss_value;
+                        result->f0_error_cents = summary.fundamental_pitch_error_cents;
+                        result->f0_error_percent = summary.fundamental_pitch_error_percent;
+                        result->harmonic_ratio_max_error_percent = summary.harmonic_ratio_max_error_percent;
+                        result->modal_spacing_max_error_percent = summary.modal_spacing_max_error_percent;
+                        result->dominant_frequency_drift_ratio = summary.sustained.dominant_frequency_drift_ratio;
+                        result->energy_drift = summary.energy.final_energy - summary.energy.initial_energy;
+                        result->f0_pitch_gate_ok = summary.fundamental_pitch_gate_ok;
+                        result->harmonic_ratio_gate_ok = summary.harmonic_ratio_gate_ok;
+                        result->modal_spacing_gate_ok = summary.modal_spacing_gate_ok;
+                        result->boundary_left_activity_gate_ok = summary.left_boundary_emission_activity_ok;
+                        result->boundary_right_activity_gate_ok = summary.right_boundary_emission_activity_ok;
+                        result->dominant_frequency_drift_gate_ok =
+                            EvaluateDominantFrequencyDriftGate(summary.sustained.dominant_frequency_drift_ratio);
+                        result->energy_drift_gate_ok = EvaluateEnergyDriftGate(result->energy_drift);
+                        result->overall_gate_ok =
+                            result->harmonic_ratio_gate_ok &&
+                            result->modal_spacing_gate_ok &&
+                            result->boundary_left_activity_gate_ok &&
+                            result->boundary_right_activity_gate_ok &&
+                            result->dominant_frequency_drift_gate_ok &&
+                            result->energy_drift_gate_ok;
+                        if (result->overall_gate_ok)
+                        {
+                            pass_count += 1;
+                        }
+
+                        sweep_result_count += 1;
+                        free(capture.samples);
+                        capture.samples = NULL;
+                    }
+                }
+            }
+        }
+
+        printf("FDTD 1D Parameter Sweep\n\n");
+        printf("Setup\n");
+        printf("  preset:                 %s\n", GetPresetName(settings.preset));
+        printf("  sweep_excitation:       nonlinear-mouth\n");
+        printf("  blocks:                 %u\n", settings.block_count);
+        printf("  corr_start/end/step:    %.4f / %.4f / %.4f\n",
+            settings.sweep_open_end_correction_start,
+            settings.sweep_open_end_correction_end,
+            settings.sweep_open_end_correction_step
+        );
+        printf("  rad_start/end/step:     %.4f / %.4f / %.4f\n",
+            settings.sweep_open_end_radiation_start,
+            settings.sweep_open_end_radiation_end,
+            settings.sweep_open_end_radiation_step
+        );
+        printf("  source_fb_start/end/step: %.4f / %.4f / %.4f\n",
+            settings.sweep_source_feedback_scale_start,
+            settings.sweep_source_feedback_scale_end,
+            settings.sweep_source_feedback_scale_step
+        );
+        printf("  bhf_start/end/step:     %.4f / %.4f / %.4f\n",
+            settings.sweep_boundary_hf_loss_start,
+            settings.sweep_boundary_hf_loss_end,
+            settings.sweep_boundary_hf_loss_step
+        );
+        printf("  combinations:           %u\n", sweep_result_count);
+        printf("  overall_pass_count:     %u\n", pass_count);
+        printf("\n");
+        printf("Top Results (first 40)\n");
+        printf("  corr    rad     src_fb  bhf     f0_cents  harm_max%%  spacing_max%%  drift_ratio  energy_drift  overall\n");
+        for (block_index = 0; (block_index < sweep_result_count) && (block_index < 40); block_index += 1)
+        {
+            ParameterSweepResult *result;
+
+            result = &parameter_sweep_results[block_index];
+            printf("  %-7.4f %-7.4f %-7.4f %-7.4f %-9.2f %-10.3f %-12.3f %-11.6f %-12.6f %s\n",
+                result->open_end_correction_coefficient,
+                result->open_end_radiation_resistance_scale,
+                result->source_feedback_scale,
+                result->boundary_hf_loss,
+                result->f0_error_cents,
+                result->harmonic_ratio_max_error_percent,
+                result->modal_spacing_max_error_percent,
+                result->dominant_frequency_drift_ratio,
+                result->energy_drift,
+                result->overall_gate_ok ? "pass" : "fail"
+            );
+        }
+
+        if (settings.summary_csv_path != NULL)
+        {
+            if (WriteParameterSweepCsv(settings.summary_csv_path, parameter_sweep_results, sweep_result_count))
+            {
+                printf("\nsummary_csv_written=%s\n", settings.summary_csv_path);
+            }
+            else
+            {
+                printf("\nsummary_csv_write_failed=%s\n", settings.summary_csv_path);
+            }
+        }
+
+        return 0;
+    }
+
+    if (settings.run_stage4_suite)
+    {
+        static const VerificationPreset SUITE_PRESETS[] =
+        {
+            VERIFICATION_PRESET_RIGID_RIGID,
+            VERIFICATION_PRESET_OPEN_RIGID,
+            VERIFICATION_PRESET_OPEN_OPEN,
+            VERIFICATION_PRESET_NARROW_MOUTH_STOPPED,
+            VERIFICATION_PRESET_OPEN_PIPE,
+        };
+        u32 suite_index;
+        u32 suite_pass_count;
+        u32 suite_count;
+
+        suite_count = 0;
+        suite_pass_count = 0;
+        for (suite_index = 0; suite_index < ARRAY_COUNT(SUITE_PRESETS); suite_index += 1)
+        {
+            VerificationSettings suite_settings;
+            Stage4SuiteResult *suite_result;
+
+            if (suite_count >= ARRAY_COUNT(stage4_suite_results))
+            {
+                break;
+            }
+
+            suite_settings = settings;
+            suite_settings.run_stage4_suite = false;
+            suite_settings.preset = SUITE_PRESETS[suite_index];
+
+            if (RunVerification(&suite_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
+            {
+                return 1;
+            }
+
+            suite_result = &stage4_suite_results[suite_count];
+            suite_result->preset = suite_settings.preset;
+            suite_result->f0_error_cents = summary.fundamental_pitch_error_cents;
+            suite_result->harmonic_ratio_max_error_percent = summary.harmonic_ratio_max_error_percent;
+            suite_result->modal_spacing_max_error_percent = summary.modal_spacing_max_error_percent;
+            suite_result->dominant_frequency_drift_ratio = summary.sustained.dominant_frequency_drift_ratio;
+            suite_result->energy_drift = summary.energy.final_energy - summary.energy.initial_energy;
+            suite_result->boundary_left_activity_gate_ok = summary.left_boundary_emission_activity_ok;
+            suite_result->boundary_right_activity_gate_ok = summary.right_boundary_emission_activity_ok;
+            suite_result->harmonic_ratio_gate_ok = summary.harmonic_ratio_gate_ok;
+            suite_result->modal_spacing_gate_ok = summary.modal_spacing_gate_ok;
+            suite_result->dominant_frequency_drift_gate_ok =
+                EvaluateDominantFrequencyDriftGate(summary.sustained.dominant_frequency_drift_ratio);
+            suite_result->energy_drift_gate_ok =
+                EvaluateEnergyDriftGate(suite_result->energy_drift);
+            suite_result->overall_core_gate_ok =
+                suite_result->boundary_left_activity_gate_ok &&
+                suite_result->boundary_right_activity_gate_ok &&
+                suite_result->harmonic_ratio_gate_ok &&
+                suite_result->modal_spacing_gate_ok &&
+                suite_result->dominant_frequency_drift_gate_ok &&
+                suite_result->energy_drift_gate_ok;
+            if (suite_result->overall_core_gate_ok)
+            {
+                suite_pass_count += 1;
+            }
+
+            suite_count += 1;
+            free(capture.samples);
+            capture.samples = NULL;
+        }
+
+        printf("FDTD 1D Stage 4 Suite\n\n");
+        printf("Setup\n");
+        printf("  excitation:             %s\n", GetExcitationTypeName(settings.excitation_type));
+        printf("  blocks:                 %u\n", settings.block_count);
+        printf("  presets:                %u\n", suite_count);
+        printf("\n");
+        printf("Suite Results\n");
+        printf("  preset        f0_cents   harm_max%%  spacing_max%%  drift_ratio  energy_drift  core\n");
+        for (suite_index = 0; suite_index < suite_count; suite_index += 1)
+        {
+            Stage4SuiteResult *suite_result;
+
+            suite_result = &stage4_suite_results[suite_index];
+            printf(
+                "  %-12s %-10.2f %-10.3f %-12.3f %-11.6f %-12.6f %s\n",
+                GetPresetName(suite_result->preset),
+                suite_result->f0_error_cents,
+                suite_result->harmonic_ratio_max_error_percent,
+                suite_result->modal_spacing_max_error_percent,
+                suite_result->dominant_frequency_drift_ratio,
+                suite_result->energy_drift,
+                suite_result->overall_core_gate_ok ? "pass" : "fail"
+            );
+        }
+        printf("\n");
+        printf("Suite Summary\n");
+        printf("  core_pass_count:        %u\n", suite_pass_count);
+        printf("  core_pass_rate:         %.2f %%\n",
+            (suite_count > 0) ? (100.0 * (f64) suite_pass_count / (f64) suite_count) : 0.0
+        );
+        printf("  note: f0 pitch error is report-only in stage-4 core gate.\n");
+
+        if (settings.summary_csv_path != NULL)
+        {
+            if (WriteStage4SuiteCsv(settings.summary_csv_path, stage4_suite_results, suite_count))
+            {
+                printf("summary_csv_written=%s\n", settings.summary_csv_path);
+            }
+            else
+            {
+                printf("summary_csv_write_failed=%s\n", settings.summary_csv_path);
+            }
         }
 
         return 0;
@@ -3064,6 +3721,25 @@ int main (int argc, char **argv)
     );
     printf("  spacing gate:           %s\n",
         summary.modal_spacing_gate_ok ? "pass" : "warn"
+    );
+    printf("  f0 error cents:         %.3f\n",
+        summary.fundamental_pitch_error_cents
+    );
+    printf("  f0 error percent:       %.3f %%\n",
+        summary.fundamental_pitch_error_percent
+    );
+    printf("  f0 pitch gate:          %s\n",
+        summary.fundamental_pitch_gate_ok ? "pass" : "warn"
+    );
+    printf("  f0 gate policy:         report-only\n");
+    printf("  harmonic ratio mean err: %.3f %%\n",
+        summary.harmonic_ratio_mean_error_percent
+    );
+    printf("  harmonic ratio max err:  %.3f %%\n",
+        summary.harmonic_ratio_max_error_percent
+    );
+    printf("  harmonic ratio gate:     %s\n",
+        summary.harmonic_ratio_gate_ok ? "pass" : "warn"
     );
     printf("\n");
 
