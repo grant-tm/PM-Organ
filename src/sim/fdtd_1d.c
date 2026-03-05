@@ -512,10 +512,14 @@ static f32 ComputeJetLabiumExcitation (
 )
 {
     static const u32 MIN_CONVECTION_DELAY_SAMPLES = 2;
+    static const f32 JET_LABIUM_BACKPRESSURE_COUPLING = 0.45f;
+    static const f32 JET_LABIUM_BACKPRESSURE_LIMIT_SCALE = 6.0f;
     f32 delayed_feedback;
+    f32 backpressure_term;
     f32 feedback_term;
     f32 feedback_signal;
     f32 drive_reference;
+    f32 available_wind_drive;
     f32 normalized_wind_drive;
     f32 jet_drive;
     f32 jet_error;
@@ -624,8 +628,16 @@ static f32 ComputeJetLabiumExcitation (
         -4.0f * drive_reference,
         4.0f * drive_reference
     );
-    jet_noise = soft_wind_drive * state->jet_labium.noise_scale * NextNoiseSample(state);
-    jet_drive = soft_wind_drive + jet_noise - feedback_term;
+    backpressure_term = ClampF32(
+        local_pressure,
+        -JET_LABIUM_BACKPRESSURE_LIMIT_SCALE * drive_reference,
+        JET_LABIUM_BACKPRESSURE_LIMIT_SCALE * drive_reference
+    );
+    available_wind_drive = soft_wind_drive - (JET_LABIUM_BACKPRESSURE_COUPLING * backpressure_term);
+    available_wind_drive = ClampF32(available_wind_drive, 0.0f, 0.1f);
+
+    jet_noise = available_wind_drive * state->jet_labium.noise_scale * NextNoiseSample(state);
+    jet_drive = available_wind_drive + jet_noise - feedback_term;
     jet_state = state->source_jet_state[source_index];
     jet_state += state->jet_labium.jet_smoothing * (jet_drive - jet_state);
     state->source_jet_state[source_index] = jet_state;
