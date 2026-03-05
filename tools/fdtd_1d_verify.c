@@ -540,6 +540,7 @@ static void ConfigureSolver (
     static const f64 TEST_COURANT_NUMBER = 0.9;
     static const f64 DEFAULT_SOURCE_RATIO = 6.0 / 128.0;
     static const f64 OPEN_PIPE_SOURCE_RATIO = 16.0 / 128.0;
+    static const f64 VOICING_OPEN_RIGID_SOURCE_RATIO = 28.0 / 128.0;
     static const f64 DEFAULT_LEFT_PROBE_RATIO = 72.0 / 128.0;
     static const f64 DEFAULT_RIGHT_PROBE_RATIO = 104.0 / 128.0;
     u32 pressure_cell_count;
@@ -561,6 +562,12 @@ static void ConfigureSolver (
         (settings->preset == VERIFICATION_PRESET_OPEN_PIPE))
     {
         source_cell_index = (u32) (OPEN_PIPE_SOURCE_RATIO * (f64) pressure_cell_count);
+    }
+    if ((settings->source_index_was_overridden == false) &&
+        settings->run_voicing_loop &&
+        (settings->preset == VERIFICATION_PRESET_OPEN_RIGID))
+    {
+        source_cell_index = (u32) (VOICING_OPEN_RIGID_SOURCE_RATIO * (f64) pressure_cell_count);
     }
     left_probe_index = settings->left_probe_index_was_overridden ?
         settings->left_probe_index :

@@ -98,6 +98,11 @@ void Fdtd1DRenderSource_SetSourceCouplingMode (
     Fdtd1DRenderSource *source,
     Fdtd1DSourceCouplingMode source_coupling_mode
 );
+void Fdtd1DRenderSource_SetSourceCellIndex (
+    Fdtd1DRenderSource *source,
+    u32 source_index,
+    u32 cell_index
+);
 void Fdtd1DRenderSource_SetDriveAmplitude (Fdtd1DRenderSource *source, f64 drive_amplitude);
 void Fdtd1DRenderSource_SetWindchestPressure (Fdtd1DRenderSource *source, f64 windchest_pressure);
 void Fdtd1DRenderSource_SetSpeechAttackSeconds (Fdtd1DRenderSource *source, f64 speech_attack_seconds);

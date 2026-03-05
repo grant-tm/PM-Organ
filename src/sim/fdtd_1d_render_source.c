@@ -346,6 +346,37 @@ void Fdtd1DRenderSource_SetSourceCouplingMode (
     source->source_coupling_mode = source_coupling_mode;
 }
 
+void Fdtd1DRenderSource_SetSourceCellIndex (
+    Fdtd1DRenderSource *source,
+    u32 source_index,
+    u32 cell_index
+)
+{
+    Fdtd1DState *state;
+
+    ASSERT(source != NULL);
+
+    state = source->solver.state;
+    ASSERT(state != NULL);
+
+    if (source_index >= state->source_count)
+    {
+        return;
+    }
+
+    if (state->pressure_cell_count == 0)
+    {
+        return;
+    }
+
+    if (cell_index >= state->pressure_cell_count)
+    {
+        cell_index = state->pressure_cell_count - 1;
+    }
+
+    state->source_cell_indices[source_index] = cell_index;
+}
+
 void Fdtd1DRenderSource_SetDriveAmplitude (Fdtd1DRenderSource *source, f64 drive_amplitude)
 {
     ASSERT(source != NULL);

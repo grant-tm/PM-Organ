@@ -306,6 +306,7 @@ static void BuildFdtdPresetDesc (
     {
         case FDTD_PRESET_TYPE_UNIFORM_STOPPED:
         {
+            source_descs[0].cell_index = 28;
         } break;
 
         case FDTD_PRESET_TYPE_NARROW_MOUTH_STOPPED:
@@ -594,6 +595,58 @@ static void SetSpeechChiffDecaySeconds (AppState *app, f32 speech_chiff_decay_se
     app->speech_chiff_decay_seconds = speech_chiff_decay_seconds;
     ApplyExcitationSettingsToSources(app);
     RestartSpeechForAllSources(app);
+}
+
+static u32 GetActivePresetSourceCellIndex (const AppState *app)
+{
+    const Fdtd1DState *state;
+
+    ASSERT(app != NULL);
+
+    state = Fdtd1D_GetState(&app->fdtd_render_sources[app->active_fdtd_preset].solver);
+    ASSERT(state != NULL);
+
+    if (state->source_count == 0)
+    {
+        return 0;
+    }
+
+    return state->source_cell_indices[0];
+}
+
+static u32 GetActivePresetMaxSourceCellIndex (const AppState *app)
+{
+    const Fdtd1DState *state;
+
+    ASSERT(app != NULL);
+
+    state = Fdtd1D_GetState(&app->fdtd_render_sources[app->active_fdtd_preset].solver);
+    ASSERT(state != NULL);
+
+    if (state->pressure_cell_count == 0)
+    {
+        return 0;
+    }
+
+    return state->pressure_cell_count - 1;
+}
+
+static void SetActivePresetSourceCellIndex (AppState *app, u32 source_cell_index)
+{
+    Fdtd1DRenderSource *render_source;
+    u32 max_source_cell_index;
+
+    ASSERT(app != NULL);
+
+    render_source = &app->fdtd_render_sources[app->active_fdtd_preset];
+    max_source_cell_index = GetActivePresetMaxSourceCellIndex(app);
+    if (source_cell_index > max_source_cell_index)
+    {
+        source_cell_index = max_source_cell_index;
+    }
+
+    Fdtd1DRenderSource_SetSourceCellIndex(render_source, 0, source_cell_index);
+    Fdtd1DRenderSource_RestartSpeech(render_source);
 }
 
 static void SetListenerDistance (AppState *app, f32 listener_distance_m)
@@ -918,6 +971,8 @@ int App_Run (void)
         gui_frame_desc.effective_drive_applied = (f32) active_render_source->last_applied_drive;
         gui_frame_desc.effective_drive_saturation_ratio = (f32) active_render_source->last_drive_saturation_ratio;
         gui_frame_desc.master_gain = app->master_gain;
+        gui_frame_desc.source_cell_index = GetActivePresetSourceCellIndex(app);
+        gui_frame_desc.source_cell_index_max = GetActivePresetMaxSourceCellIndex(app);
         gui_frame_desc.active_preset_index = app->active_fdtd_preset;
         gui_frame_desc.active_excitation_mode = app->active_excitation_mode;
         gui_frame_desc.excitation_mode_count = APP_EXCITATION_MODE_COUNT;
@@ -948,6 +1003,11 @@ int App_Run (void)
         if (gui_actions.request_select_preset)
         {
             SelectFdtdPreset(app, (FdtdPresetType) gui_actions.selected_preset_index);
+        }
+
+        if (gui_actions.request_set_source_cell_index)
+        {
+            SetActivePresetSourceCellIndex(app, gui_actions.source_cell_index);
         }
 
         if (gui_actions.request_select_excitation_mode)

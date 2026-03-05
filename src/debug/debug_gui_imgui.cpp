@@ -403,6 +403,29 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
                 frame_actions->selected_preset_index = (u32) preset_index;
             }
         }
+
+        ImGui::Separator();
+        {
+            i32 source_cell_index;
+            i32 source_cell_index_max;
+
+            source_cell_index = (i32) frame_desc->source_cell_index;
+            source_cell_index_max = (i32) frame_desc->source_cell_index_max;
+            if (source_cell_index_max < 0)
+            {
+                source_cell_index_max = 0;
+            }
+            if (source_cell_index > source_cell_index_max)
+            {
+                source_cell_index = source_cell_index_max;
+            }
+
+            if (ImGui::SliderInt("Source Cell Index", &source_cell_index, 0, source_cell_index_max))
+            {
+                frame_actions->request_set_source_cell_index = true;
+                frame_actions->source_cell_index = (u32) source_cell_index;
+            }
+        }
     }
     ImGui::End();
 

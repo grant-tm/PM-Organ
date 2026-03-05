@@ -31,6 +31,8 @@ typedef struct DebugGuiFrameDesc
     f32 effective_drive_applied;
     f32 effective_drive_saturation_ratio;
     f32 master_gain;
+    u32 source_cell_index;
+    u32 source_cell_index_max;
     u32 active_preset_index;
     u32 active_excitation_mode;
     u32 excitation_mode_count;
@@ -61,6 +63,7 @@ typedef struct DebugGuiFrameActions
     bool request_set_speech_attack_seconds;
     bool request_set_speech_chiff_amount;
     bool request_set_speech_chiff_decay_seconds;
+    bool request_set_source_cell_index;
     bool request_set_listener_distance;
     bool request_set_listener_mouth_pressure_mix;
     bool request_set_listener_crossfeed;
@@ -71,6 +74,7 @@ typedef struct DebugGuiFrameActions
     u32 selected_source_coupling_mode;
     u32 selected_output_extraction_mode;
     u32 selected_preset_index;
+    u32 source_cell_index;
     f32 drive_amplitude;
     f32 windchest_pressure;
     f32 speech_attack_seconds;
