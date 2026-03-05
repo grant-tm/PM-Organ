@@ -9,6 +9,19 @@
 
 #define MODE_COUNT 5
 
+enum
+{
+    VERIFY_PROBE_INDEX_DEBUG_LEFT = 0,
+    VERIFY_PROBE_INDEX_DEBUG_RIGHT,
+    VERIFY_PROBE_INDEX_LEFT_MOUTH_PRESSURE,
+    VERIFY_PROBE_INDEX_LEFT_MOUTH_VELOCITY,
+    VERIFY_PROBE_INDEX_RIGHT_MOUTH_PRESSURE,
+    VERIFY_PROBE_INDEX_RIGHT_MOUTH_VELOCITY,
+    VERIFY_PROBE_INDEX_LEFT_BOUNDARY_EMISSION,
+    VERIFY_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION,
+    VERIFY_PROBE_COUNT
+};
+
 static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc);
 
 typedef struct VerificationResult
@@ -199,6 +212,12 @@ typedef struct VerificationRunSummary
     f64 harmonic_ratio_mean_error_percent;
     f64 harmonic_ratio_max_error_percent;
     bool harmonic_ratio_gate_ok;
+    f64 listener_left_rms;
+    f64 listener_right_rms;
+    f64 listener_peak_abs;
+    f64 listener_stereo_spread_rms;
+    bool listener_activity_gate_ok;
+    bool listener_spread_gate_ok;
     u32 pressure_cell_count;
     f64 tube_length_m;
 } VerificationRunSummary;
@@ -425,6 +444,21 @@ static bool EvaluateFundamentalPitchGate (f64 pitch_error_cents)
     return fabs(pitch_error_cents) <= MAX_ABS_PITCH_ERROR_CENTS;
 }
 
+static f32 ComputeOnePoleAlpha (f32 cutoff_hz, u32 sample_rate)
+{
+    f32 rc;
+    f32 dt;
+
+    if ((cutoff_hz <= 0.0f) || (sample_rate == 0))
+    {
+        return 1.0f;
+    }
+
+    rc = 1.0f / (2.0f * 3.14159265f * cutoff_hz);
+    dt = 1.0f / (f32) sample_rate;
+    return dt / (rc + dt);
+}
+
 static bool EvaluateSpeechOnsetToPeakGate (f64 onset_to_peak_ms)
 {
     static const f64 MAX_ONSET_TO_PEAK_MS = 700.0;
@@ -508,22 +542,52 @@ static void ConfigureSolver (
         right_probe_index = pressure_cell_count - 1;
     }
 
-    probe_descs[0].type = settings->probe_type;
-    probe_descs[0].cell_index = left_probe_index;
-    probe_descs[0].output_channel_index = 0;
-    probe_descs[0].is_enabled = true;
+    probe_descs[VERIFY_PROBE_INDEX_DEBUG_LEFT].type = settings->probe_type;
+    probe_descs[VERIFY_PROBE_INDEX_DEBUG_LEFT].cell_index = left_probe_index;
+    probe_descs[VERIFY_PROBE_INDEX_DEBUG_LEFT].output_channel_index = VERIFY_PROBE_INDEX_DEBUG_LEFT;
+    probe_descs[VERIFY_PROBE_INDEX_DEBUG_LEFT].is_enabled = true;
 
-    probe_descs[1].type = settings->probe_type;
-    probe_descs[1].cell_index = right_probe_index;
-    probe_descs[1].output_channel_index = 1;
-    probe_descs[1].is_enabled = true;
+    probe_descs[VERIFY_PROBE_INDEX_DEBUG_RIGHT].type = settings->probe_type;
+    probe_descs[VERIFY_PROBE_INDEX_DEBUG_RIGHT].cell_index = right_probe_index;
+    probe_descs[VERIFY_PROBE_INDEX_DEBUG_RIGHT].output_channel_index = VERIFY_PROBE_INDEX_DEBUG_RIGHT;
+    probe_descs[VERIFY_PROBE_INDEX_DEBUG_RIGHT].is_enabled = true;
+
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_MOUTH_PRESSURE].type = FDTD_1D_PROBE_TYPE_PRESSURE;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_MOUTH_PRESSURE].cell_index = 0;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_MOUTH_PRESSURE].output_channel_index = VERIFY_PROBE_INDEX_LEFT_MOUTH_PRESSURE;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_MOUTH_PRESSURE].is_enabled = true;
+
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_MOUTH_VELOCITY].type = FDTD_1D_PROBE_TYPE_VELOCITY;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_MOUTH_VELOCITY].cell_index = 0;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_MOUTH_VELOCITY].output_channel_index = VERIFY_PROBE_INDEX_LEFT_MOUTH_VELOCITY;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_MOUTH_VELOCITY].is_enabled = true;
+
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_MOUTH_PRESSURE].type = FDTD_1D_PROBE_TYPE_PRESSURE;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_MOUTH_PRESSURE].cell_index = pressure_cell_count - 1;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_MOUTH_PRESSURE].output_channel_index = VERIFY_PROBE_INDEX_RIGHT_MOUTH_PRESSURE;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_MOUTH_PRESSURE].is_enabled = true;
+
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_MOUTH_VELOCITY].type = FDTD_1D_PROBE_TYPE_VELOCITY;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_MOUTH_VELOCITY].cell_index = pressure_cell_count;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_MOUTH_VELOCITY].output_channel_index = VERIFY_PROBE_INDEX_RIGHT_MOUTH_VELOCITY;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_MOUTH_VELOCITY].is_enabled = true;
+
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_BOUNDARY_EMISSION].type = FDTD_1D_PROBE_TYPE_LEFT_BOUNDARY_EMISSION;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_BOUNDARY_EMISSION].cell_index = 0;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_BOUNDARY_EMISSION].output_channel_index = VERIFY_PROBE_INDEX_LEFT_BOUNDARY_EMISSION;
+    probe_descs[VERIFY_PROBE_INDEX_LEFT_BOUNDARY_EMISSION].is_enabled = true;
+
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION].type = FDTD_1D_PROBE_TYPE_RIGHT_BOUNDARY_EMISSION;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION].cell_index = 0;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION].output_channel_index = VERIFY_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION;
+    probe_descs[VERIFY_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION].is_enabled = true;
 
     source_descs[0].cell_index = source_cell_index;
     source_descs[0].is_enabled = true;
 
     desc->sample_rate = 48000;
     desc->block_frame_count = 64;
-    desc->output_channel_count = 2;
+    desc->output_channel_count = VERIFY_PROBE_COUNT;
     desc->tube_length_m = (f64) pressure_cell_count * (343.0 / (TEST_COURANT_NUMBER * 48000.0));
     desc->wave_speed_m_per_s = 343.0;
     desc->density_kg_per_m3 = 1.225;
@@ -622,7 +686,7 @@ static void ConfigureSolver (
         } break;
     }
 
-    desc->probe_count = 2;
+    desc->probe_count = VERIFY_PROBE_COUNT;
     desc->probe_descs = probe_descs;
     desc->source_count = 1;
     desc->source_descs = source_descs;
@@ -2640,6 +2704,138 @@ static void AnalyzeHarmonicRatios (
     *gate_ok = (*max_error_percent <= max_ratio_error_percent);
 }
 
+static void AnalyzeListenerModelFromCapture (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    VerificationRunSummary *summary
+)
+{
+    static const f32 LISTENER_DISTANCE_M = 4.0f;
+    static const f32 LISTENER_DISTANCE_ATTENUATION_SCALE = 0.35f;
+    static const f32 LISTENER_MOUTH_PRESSURE_MIX = 0.22f;
+    static const f32 LISTENER_CROSSFEED = 0.10f;
+    static const f32 LISTENER_CUTOFF_HZ = 3200.0f;
+    static const f64 LISTENER_MIN_ACTIVITY_RMS = 1.0e-6;
+    static const f64 LISTENER_MIN_STEREO_SPREAD_RMS = 1.0e-5;
+    static const f64 LISTENER_MAX_MONO_SPREAD_RMS = 1.0e-5;
+
+    f32 distance_attenuation;
+    f32 lowpass_alpha;
+    f32 listener_left_state;
+    f32 listener_right_state;
+    f64 left_sum_squares;
+    f64 right_sum_squares;
+    f64 spread_sum_squares;
+    f64 peak_abs;
+    bool left_is_open;
+    bool right_is_open;
+    u32 frame_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(desc != NULL);
+    ASSERT(summary != NULL);
+
+    summary->listener_left_rms = 0.0;
+    summary->listener_right_rms = 0.0;
+    summary->listener_peak_abs = 0.0;
+    summary->listener_stereo_spread_rms = 0.0;
+    summary->listener_activity_gate_ok = false;
+    summary->listener_spread_gate_ok = false;
+
+    if ((capture->samples == NULL) || (capture->frame_count == 0) || (capture->channel_count < VERIFY_PROBE_COUNT))
+    {
+        return;
+    }
+
+    distance_attenuation =
+        1.0f / (1.0f + (LISTENER_DISTANCE_ATTENUATION_SCALE * LISTENER_DISTANCE_M));
+    lowpass_alpha = ComputeOnePoleAlpha(LISTENER_CUTOFF_HZ, desc->sample_rate);
+    listener_left_state = 0.0f;
+    listener_right_state = 0.0f;
+    left_sum_squares = 0.0;
+    right_sum_squares = 0.0;
+    spread_sum_squares = 0.0;
+    peak_abs = 0.0;
+    left_is_open = (desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN);
+    right_is_open = (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN);
+
+    for (frame_index = 0; frame_index < capture->frame_count; frame_index += 1)
+    {
+        f32 left_emission;
+        f32 right_emission;
+        f32 left_mouth_pressure;
+        f32 right_mouth_pressure;
+        f32 left_raw;
+        f32 right_raw;
+        f32 left_output;
+        f32 right_output;
+        f32 spread_sample;
+        usize sample_offset;
+        f64 frame_peak_abs;
+
+        sample_offset = (usize) frame_index * (usize) capture->channel_count;
+        left_emission = left_is_open ? capture->samples[sample_offset + VERIFY_PROBE_INDEX_LEFT_BOUNDARY_EMISSION] : 0.0f;
+        right_emission = right_is_open ? capture->samples[sample_offset + VERIFY_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION] : 0.0f;
+        left_mouth_pressure = capture->samples[sample_offset + VERIFY_PROBE_INDEX_LEFT_MOUTH_PRESSURE];
+        right_mouth_pressure = capture->samples[sample_offset + VERIFY_PROBE_INDEX_RIGHT_MOUTH_PRESSURE];
+
+        left_raw = left_emission + (LISTENER_MOUTH_PRESSURE_MIX * left_mouth_pressure);
+        right_raw = right_emission + (LISTENER_MOUTH_PRESSURE_MIX * right_mouth_pressure);
+        if (left_is_open && right_is_open)
+        {
+            left_raw += LISTENER_CROSSFEED * right_emission;
+            right_raw += LISTENER_CROSSFEED * left_emission;
+        }
+        else
+        {
+            f32 mono_raw;
+
+            mono_raw = left_is_open ? left_raw : right_raw;
+            left_raw = mono_raw;
+            right_raw = mono_raw;
+        }
+
+        listener_left_state += lowpass_alpha * (left_raw - listener_left_state);
+        listener_right_state += lowpass_alpha * (right_raw - listener_right_state);
+        left_output = distance_attenuation * listener_left_state;
+        right_output = distance_attenuation * listener_right_state;
+        spread_sample = left_output - right_output;
+
+        left_sum_squares += (f64) left_output * (f64) left_output;
+        right_sum_squares += (f64) right_output * (f64) right_output;
+        spread_sum_squares += (f64) spread_sample * (f64) spread_sample;
+        frame_peak_abs = fabs((f64) left_output);
+        if (fabs((f64) right_output) > frame_peak_abs)
+        {
+            frame_peak_abs = fabs((f64) right_output);
+        }
+        if (frame_peak_abs > peak_abs)
+        {
+            peak_abs = frame_peak_abs;
+        }
+    }
+
+    summary->listener_left_rms = sqrt(left_sum_squares / (f64) capture->frame_count);
+    summary->listener_right_rms = sqrt(right_sum_squares / (f64) capture->frame_count);
+    summary->listener_peak_abs = peak_abs;
+    summary->listener_stereo_spread_rms = sqrt(spread_sum_squares / (f64) capture->frame_count);
+
+    summary->listener_activity_gate_ok =
+        (summary->listener_left_rms >= LISTENER_MIN_ACTIVITY_RMS) ||
+        (summary->listener_right_rms >= LISTENER_MIN_ACTIVITY_RMS);
+
+    if (left_is_open && right_is_open)
+    {
+        summary->listener_spread_gate_ok =
+            summary->listener_stereo_spread_rms >= LISTENER_MIN_STEREO_SPREAD_RMS;
+    }
+    else
+    {
+        summary->listener_spread_gate_ok =
+            summary->listener_stereo_spread_rms <= LISTENER_MAX_MONO_SPREAD_RMS;
+    }
+}
+
 static f64 ComputeStateEnergy (const Fdtd1DState *state)
 {
     f64 energy;
@@ -2877,6 +3073,7 @@ static bool RunVerification (
     }
     AnalyzeSustainedBehavior(capture, solver_desc, 0, &summary->sustained);
     AnalyzeSpeechBehavior(capture, solver_desc, 0, &summary->speech);
+    AnalyzeListenerModelFromCapture(capture, solver_desc, summary);
 
     state = Fdtd1D_GetState(&solver);
     if ((state != NULL) && (state->boundary_emission_sample_count > 0))
@@ -2938,7 +3135,7 @@ int main (int argc, char **argv)
     ParameterSweepResult parameter_sweep_results[512];
     Stage4SuiteResult stage4_suite_results[8];
     Fdtd1DDesc solver_desc;
-    Fdtd1DProbeDesc probe_descs[2];
+    Fdtd1DProbeDesc probe_descs[VERIFY_PROBE_COUNT];
     Fdtd1DSourceDesc source_descs[1];
     SimulationOfflineCapture capture;
     ArrivalSummary left_arrival;
@@ -3675,6 +3872,27 @@ int main (int argc, char **argv)
     );
     printf("  right activity gate:    %s\n",
         summary.right_boundary_emission_activity_ok ? "pass" : "warn"
+    );
+    printf("\n");
+
+    printf("Listener Validation\n");
+    printf("  left rms:               %.9f\n",
+        summary.listener_left_rms
+    );
+    printf("  right rms:              %.9f\n",
+        summary.listener_right_rms
+    );
+    printf("  peak abs:               %.9f\n",
+        summary.listener_peak_abs
+    );
+    printf("  stereo spread rms:      %.9f\n",
+        summary.listener_stereo_spread_rms
+    );
+    printf("  activity gate:          %s\n",
+        summary.listener_activity_gate_ok ? "pass" : "warn"
+    );
+    printf("  spread gate:            %s\n",
+        summary.listener_spread_gate_ok ? "pass" : "warn"
     );
     printf("\n");
 
