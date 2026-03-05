@@ -5,8 +5,8 @@
 #include "pm_organ/sim/fdtd_1d.h"
 
 static const f64 FDTD_1D_PI = 3.14159265358979323846;
-static const f64 OPEN_END_CORRECTION_COEFFICIENT = 0.45;
-static const f64 OPEN_END_RADIATION_RESISTANCE_SCALE = 1.5;
+static const f64 DEFAULT_OPEN_END_CORRECTION_COEFFICIENT = 0.45;
+static const f64 DEFAULT_OPEN_END_RADIATION_RESISTANCE_SCALE = 1.5;
 static const u32 NONLINEAR_MOUTH_MAX_DELAY_SAMPLES = 64;
 static const f32 JET_LABIUM_INJECTION_MAX = 0.01f;
 static const Fdtd1DNonlinearMouthParameters DEFAULT_NONLINEAR_MOUTH_PARAMETERS =
@@ -844,6 +844,8 @@ static void InitializePressureUpdateCoefficients (Fdtd1DState *state)
 static void InitializeOpenBoundaryFilter (
     const Fdtd1DState *state,
     f32 boundary_area_m2,
+    f64 open_end_correction_coefficient,
+    f64 open_end_radiation_resistance_scale,
     f32 *filter_a1,
     f32 *filter_b0,
     f32 *filter_b1
@@ -868,9 +870,9 @@ static void InitializeOpenBoundaryFilter (
     ASSERT(boundary_area_m2 > 0.0f);
 
     pipe_radius_m = sqrt((f64) boundary_area_m2 / FDTD_1D_PI);
-    end_correction_m = OPEN_END_CORRECTION_COEFFICIENT * pipe_radius_m;
+    end_correction_m = open_end_correction_coefficient * pipe_radius_m;
     radiation_inertance = state->density_kg_per_m3 * end_correction_m;
-    radiation_resistance = OPEN_END_RADIATION_RESISTANCE_SCALE * state->characteristic_impedance;
+    radiation_resistance = open_end_radiation_resistance_scale * state->characteristic_impedance;
     bilinear_scale = 2.0 / state->dt;
 
     reflection_numerator_slope =
@@ -1328,6 +1330,16 @@ bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc)
         return false;
     }
 
+    if (desc->open_end_correction_coefficient < 0.0)
+    {
+        return false;
+    }
+
+    if (desc->open_end_radiation_resistance_scale < 0.0)
+    {
+        return false;
+    }
+
     if (ValidateBoundary(&desc->left_boundary) == false)
     {
         return false;
@@ -1382,6 +1394,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     SimulationInterface simulation_interface;
     Fdtd1DState *state;
     f64 dt;
+    f64 open_end_correction_coefficient;
+    f64 open_end_radiation_resistance_scale;
     f64 velocity_update_coeff;
     u32 probe_index;
     u32 source_index;
@@ -1499,6 +1513,16 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     state->velocity_high_frequency_loss = (f32) desc->uniform_high_frequency_loss;
     state->boundary_loss = (f32) desc->uniform_boundary_loss;
     state->boundary_high_frequency_loss = (f32) desc->uniform_boundary_high_frequency_loss;
+    open_end_correction_coefficient = desc->open_end_correction_coefficient;
+    if (open_end_correction_coefficient <= 0.0)
+    {
+        open_end_correction_coefficient = DEFAULT_OPEN_END_CORRECTION_COEFFICIENT;
+    }
+    open_end_radiation_resistance_scale = desc->open_end_radiation_resistance_scale;
+    if (open_end_radiation_resistance_scale <= 0.0)
+    {
+        open_end_radiation_resistance_scale = DEFAULT_OPEN_END_RADIATION_RESISTANCE_SCALE;
+    }
     InitializeUniformField(state->velocity_update_coeff, desc->velocity_cell_count, (f32) velocity_update_coeff);
     InitializePressureUpdateCoefficients(state);
 
@@ -1541,6 +1565,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
         InitializeOpenBoundaryFilter(
             state,
             state->area_velocity[0],
+            open_end_correction_coefficient,
+            open_end_radiation_resistance_scale,
             &state->left_open_reflection_filter_a1,
             &state->left_open_reflection_filter_b0,
             &state->left_open_reflection_filter_b1
@@ -1553,6 +1579,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
         InitializeOpenBoundaryFilter(
             state,
             state->area_velocity[state->velocity_cell_count - 1],
+            open_end_correction_coefficient,
+            open_end_radiation_resistance_scale,
             &state->right_open_reflection_filter_a1,
             &state->right_open_reflection_filter_b0,
             &state->right_open_reflection_filter_b1

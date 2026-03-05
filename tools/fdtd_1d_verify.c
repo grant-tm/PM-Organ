@@ -158,6 +158,8 @@ typedef struct VerificationSettings
     f64 uniform_boundary_high_frequency_loss;
     f64 area_loss_reference_m2;
     f64 area_loss_strength;
+    f64 open_end_correction_coefficient;
+    f64 open_end_radiation_resistance_scale;
 } VerificationSettings;
 
 typedef struct VerificationRunSummary
@@ -446,6 +448,8 @@ static void ConfigureSolver (
     desc->uniform_boundary_high_frequency_loss = settings->uniform_boundary_high_frequency_loss;
     desc->area_loss_reference_m2 = settings->area_loss_reference_m2;
     desc->area_loss_strength = settings->area_loss_strength;
+    desc->open_end_correction_coefficient = settings->open_end_correction_coefficient;
+    desc->open_end_radiation_resistance_scale = settings->open_end_radiation_resistance_scale;
     desc->area_segment_count = 0;
     desc->area_segment_descs = NULL;
     switch (settings->preset)
@@ -695,6 +699,8 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->uniform_boundary_high_frequency_loss = 0.028;
     settings->area_loss_reference_m2 = 0.01;
     settings->area_loss_strength = 0.35;
+    settings->open_end_correction_coefficient = 0.45;
+    settings->open_end_radiation_resistance_scale = 1.5;
 }
 
 static void ParseArguments (int argc, char **argv, VerificationSettings *settings)
@@ -885,6 +891,20 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         }
 
         if (TryParseDoubleValue(argument, "area_loss_strength=", &settings->area_loss_strength))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "open_end_correction=", &settings->open_end_correction_coefficient))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(
+                argument,
+                "open_end_radiation_resistance=",
+                &settings->open_end_radiation_resistance_scale
+            ))
         {
             continue;
         }
@@ -2658,6 +2678,12 @@ int main (int argc, char **argv)
     );
     printf("  area_loss_strength:     %.6f\n",
         solver_desc.area_loss_strength
+    );
+    printf("  open_end_correction:    %.6f\n",
+        solver_desc.open_end_correction_coefficient
+    );
+    printf("  open_end_rad_resist:    %.6f\n",
+        solver_desc.open_end_radiation_resistance_scale
     );
     printf("  left_boundary:          %s\n",
         GetBoundaryTypeName(solver_desc.left_boundary.type)

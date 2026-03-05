@@ -93,6 +93,8 @@ typedef struct Fdtd1DDesc
     f64 uniform_boundary_high_frequency_loss;
     f64 area_loss_reference_m2;
     f64 area_loss_strength;
+    f64 open_end_correction_coefficient;
+    f64 open_end_radiation_resistance_scale;
 
     u32 area_segment_count;
     const Fdtd1DAreaSegmentDesc *area_segment_descs;
