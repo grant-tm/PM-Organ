@@ -147,6 +147,7 @@ typedef struct VerificationSettings
     Fdtd1DProbeType probe_type;
     VerificationExcitationType excitation_type;
     Fdtd1DNonlinearMouthParameters nonlinear_mouth_parameters;
+    Fdtd1DJetLabiumParameters jet_labium_parameters;
     const char *csv_output_path;
     bool source_index_was_overridden;
     bool left_probe_index_was_overridden;
@@ -302,6 +303,10 @@ typedef struct Stage6SuiteNoteResult
     f64 expected_ratio_from_base;
     f64 measured_ratio_from_base;
     f64 ratio_error_percent;
+    f64 sustain_ratio;
+    f64 attack_10_to_90_ms;
+    f64 harmonic_ratio;
+    f64 harmonic_slope_db_per_harmonic;
     bool sustain_gate_ok;
     bool attack_gate_ok;
     bool harmonic_gate_ok;
@@ -914,6 +919,16 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->nonlinear_mouth_parameters.saturation_gain = 80.0f;
     settings->nonlinear_mouth_parameters.drive_limit = 0.0005f;
     settings->nonlinear_mouth_parameters.delay_samples = 8;
+    settings->jet_labium_parameters.max_output = 0.0020f;
+    settings->jet_labium_parameters.noise_scale = 0.15f;
+    settings->jet_labium_parameters.pressure_feedback = 0.16f;
+    settings->jet_labium_parameters.velocity_feedback = 0.05f;
+    settings->jet_labium_parameters.feedback_leak = 0.35f;
+    settings->jet_labium_parameters.jet_smoothing = 0.30f;
+    settings->jet_labium_parameters.labium_split_gain = 1.9f;
+    settings->jet_labium_parameters.saturation_gain = 12.0f;
+    settings->jet_labium_parameters.drive_limit = 0.0022f;
+    settings->jet_labium_parameters.delay_samples = 9;
     settings->csv_output_path = NULL;
     settings->source_index_was_overridden = false;
     settings->left_probe_index_was_overridden = false;
@@ -3013,6 +3028,12 @@ static bool RunVerification (
         goto cleanup;
     }
 
+    if (Fdtd1D_SetJetLabiumParameters(&solver, &settings->jet_labium_parameters) == false)
+    {
+        fprintf(stderr, "Failed to configure jet-labium parameters.\n");
+        goto cleanup;
+    }
+
     simulation = Fdtd1D_GetSimulation(&solver);
 
     capture->channel_count = solver_desc->output_channel_count;
@@ -3730,8 +3751,8 @@ int main (int argc, char **argv)
             31.0 / 128.0,
             32.0 / 128.0,
             34.0 / 128.0,
-            36.0 / 128.0,
-            38.0 / 128.0
+            34.0 / 128.0,
+            30.0 / 128.0
         };
         u32 note_index;
         u32 suite_count;
@@ -3790,16 +3811,47 @@ int main (int argc, char **argv)
             suite_settings.uniform_loss *= (1.0 - (0.10 * note_ratio));
             suite_settings.uniform_high_frequency_loss *= (1.0 - (0.25 * note_ratio));
             suite_settings.uniform_boundary_high_frequency_loss *= (1.0 - (0.35 * note_ratio));
-            suite_settings.nonlinear_mouth_parameters.max_output =
-                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.max_output * (1.0 + (0.35 * note_ratio)));
-            suite_settings.nonlinear_mouth_parameters.noise_scale =
-                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.noise_scale * (1.0 + (0.50 * note_ratio)));
-            suite_settings.nonlinear_mouth_parameters.pressure_feedback =
-                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.pressure_feedback * (1.0 + (0.20 * note_ratio)));
-            suite_settings.nonlinear_mouth_parameters.velocity_feedback =
-                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.velocity_feedback * (1.0 + (0.20 * note_ratio)));
-            suite_settings.nonlinear_mouth_parameters.drive_limit =
-                (f32) ((f64) suite_settings.nonlinear_mouth_parameters.drive_limit * (1.0 + (0.35 * note_ratio)));
+            suite_settings.jet_labium_parameters.max_output =
+                (f32) ((f64) suite_settings.jet_labium_parameters.max_output * (1.0 + (0.15 * note_ratio)));
+            suite_settings.jet_labium_parameters.noise_scale =
+                (f32) ((f64) suite_settings.jet_labium_parameters.noise_scale * (1.0 + (0.20 * note_ratio)));
+            suite_settings.jet_labium_parameters.pressure_feedback =
+                (f32) ((f64) suite_settings.jet_labium_parameters.pressure_feedback * (1.0 + (0.10 * note_ratio)));
+            suite_settings.jet_labium_parameters.velocity_feedback =
+                (f32) ((f64) suite_settings.jet_labium_parameters.velocity_feedback * (1.0 + (0.10 * note_ratio)));
+            suite_settings.jet_labium_parameters.feedback_leak =
+                (f32) ((f64) suite_settings.jet_labium_parameters.feedback_leak * (1.0 - (0.05 * note_ratio)));
+            suite_settings.jet_labium_parameters.jet_smoothing =
+                (f32) ((f64) suite_settings.jet_labium_parameters.jet_smoothing * (1.0 - (0.05 * note_ratio)));
+            suite_settings.jet_labium_parameters.labium_split_gain =
+                (f32) ((f64) suite_settings.jet_labium_parameters.labium_split_gain * (1.0 + (0.15 * note_ratio)));
+            suite_settings.jet_labium_parameters.saturation_gain =
+                (f32) ((f64) suite_settings.jet_labium_parameters.saturation_gain * (1.0 + (0.10 * note_ratio)));
+            suite_settings.jet_labium_parameters.drive_limit =
+                (f32) ((f64) suite_settings.jet_labium_parameters.drive_limit * (1.0 + (0.15 * note_ratio)));
+            suite_settings.jet_labium_parameters.delay_samples =
+                (u32) ((((f64) suite_settings.jet_labium_parameters.delay_samples) * (1.0 - (0.10 * note_ratio))) + 0.5);
+
+            if (suite_settings.jet_labium_parameters.feedback_leak < 0.05f)
+            {
+                suite_settings.jet_labium_parameters.feedback_leak = 0.05f;
+            }
+            if (suite_settings.jet_labium_parameters.feedback_leak > 0.95f)
+            {
+                suite_settings.jet_labium_parameters.feedback_leak = 0.95f;
+            }
+            if (suite_settings.jet_labium_parameters.jet_smoothing < 0.05f)
+            {
+                suite_settings.jet_labium_parameters.jet_smoothing = 0.05f;
+            }
+            if (suite_settings.jet_labium_parameters.jet_smoothing > 1.0f)
+            {
+                suite_settings.jet_labium_parameters.jet_smoothing = 1.0f;
+            }
+            if (suite_settings.jet_labium_parameters.delay_samples < 2)
+            {
+                suite_settings.jet_labium_parameters.delay_samples = 2;
+            }
 
             if (RunVerification(&suite_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
             {
@@ -3825,6 +3877,12 @@ int main (int argc, char **argv)
             suite_result->expected_ratio_from_base = 0.0;
             suite_result->measured_ratio_from_base = 0.0;
             suite_result->ratio_error_percent = 0.0;
+            suite_result->sustain_ratio = summary.sustained.late_to_early_rms_ratio;
+            suite_result->attack_10_to_90_ms =
+                summary.speech.attack_was_found ? summary.speech.attack_10_to_90_ms : -1.0;
+            suite_result->harmonic_ratio = summary.sustained.late_harmonic_energy_ratio;
+            suite_result->harmonic_slope_db_per_harmonic =
+                summary.sustained.harmonic_decay_slope_db_per_harmonic;
             suite_result->sustain_gate_ok = sustain_gate_ok;
             suite_result->attack_gate_ok = attack_gate_ok;
             suite_result->harmonic_gate_ok = harmonic_gate_ok;
@@ -3889,20 +3947,24 @@ int main (int argc, char **argv)
         printf("  ratio_error_percent:    <= 3.0\n");
         printf("\n");
         printf("Per-Note Results\n");
-        printf("  note  semis  cells  source  f0_hz    ratio_err%%  sustain  attack  harmonic  stability  voicing\n");
+        printf("  note  semis  cells  source  f0_hz    ratio_err%%  sus_rt  atk_ms   harm_rt  harm_slp  sustain  attack  harmonic  stability  voicing\n");
         for (note_index = 0; note_index < suite_count; note_index += 1)
         {
             Stage6SuiteNoteResult *suite_result;
 
             suite_result = &stage6_suite_results[note_index];
             printf(
-                "  %-5u %-6u %-6u %-7u %-8.2f %-11.3f %-8s %-7s %-9s %-10s %s\n",
+                "  %-5u %-6u %-6u %-7u %-8.2f %-11.3f %-7.3f %-8.2f %-8.3f %-9.2f %-8s %-7s %-9s %-10s %s\n",
                 suite_result->note_index,
                 suite_result->semitone_offset,
                 suite_result->pressure_cell_count,
                 suite_result->source_cell_index,
                 suite_result->measured_f0_hz,
                 suite_result->ratio_error_percent,
+                suite_result->sustain_ratio,
+                suite_result->attack_10_to_90_ms,
+                suite_result->harmonic_ratio,
+                suite_result->harmonic_slope_db_per_harmonic,
                 suite_result->sustain_gate_ok ? "pass" : "warn",
                 suite_result->attack_gate_ok ? "pass" : "warn",
                 suite_result->harmonic_gate_ok ? "pass" : "warn",

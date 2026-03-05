@@ -132,8 +132,8 @@ static const f64 RANK_NOTE_SOURCE_RATIOS[RANK_NOTE_COUNT] =
     31.0 / 128.0,
     32.0 / 128.0,
     34.0 / 128.0,
-    36.0 / 128.0,
-    38.0 / 128.0,
+    34.0 / 128.0,
+    30.0 / 128.0,
 };
 
 static const u32 RANK_NOTE_CELL_COUNTS[RANK_NOTE_COUNT] =
