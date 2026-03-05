@@ -9,6 +9,7 @@ typedef enum Fdtd1DOutputExtractionMode
 {
     FDTD_1D_OUTPUT_EXTRACTION_MODE_RAW_PROBES = 0,
     FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION,
+    FDTD_1D_OUTPUT_EXTRACTION_MODE_LISTENER_MODEL,
 } Fdtd1DOutputExtractionMode;
 
 typedef enum Fdtd1DExcitationMode
@@ -62,6 +63,8 @@ typedef struct Fdtd1DRenderSource
     f64 last_requested_drive;
     f64 last_applied_drive;
     f64 last_drive_saturation_ratio;
+    f32 listener_left_state;
+    f32 listener_right_state;
     Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_pending;
     u32 startup_impulse_target_index;

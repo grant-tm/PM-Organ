@@ -28,6 +28,12 @@ static const f64 MAX_SAFE_STARTUP_CHIFF_NOISE = 0.0025;
 static const f64 DEFAULT_SPEECH_ATTACK_SECONDS = 0.06;
 static const f64 DEFAULT_SPEECH_CHIFF_AMOUNT = 0.35;
 static const f64 DEFAULT_SPEECH_CHIFF_DECAY_SECONDS = 0.05;
+static const f32 LISTENER_MODEL_DISTANCE_M = 4.0f;
+static const f32 LISTENER_MODEL_DISTANCE_ATTENUATION_SCALE = 0.35f;
+static const f32 LISTENER_MODEL_MOUTH_PRESSURE_MIX = 0.22f;
+static const f32 LISTENER_MODEL_CROSSFEED = 0.10f;
+static const f32 LISTENER_MODEL_CUTOFF_HZ = 3200.0f;
+static const f32 LISTENER_MODEL_OUTPUT_CLAMP = 0.35f;
 
 static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
 {
@@ -52,6 +58,36 @@ static f64 ClampNonNegativeF64 (f64 value)
 static f64 ClampUnitF64 (f64 value)
 {
     return ClampF64(value, 0.0, 1.0);
+}
+
+static f32 ClampF32 (f32 value, f32 min_value, f32 max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
+    }
+
+    if (value > max_value)
+    {
+        return max_value;
+    }
+
+    return value;
+}
+
+static f32 ComputeOnePoleLowpassAlpha (f32 cutoff_hz, u32 sample_rate)
+{
+    f32 rc;
+    f32 dt;
+
+    if ((cutoff_hz <= 0.0f) || (sample_rate == 0))
+    {
+        return 1.0f;
+    }
+
+    rc = 1.0f / (2.0f * 3.14159265f * cutoff_hz);
+    dt = 1.0f / (f32) sample_rate;
+    return dt / (rc + dt);
 }
 
 static f64 ComputeSmoothedDriveAmplitude (f64 current_value, f64 target_value, f64 block_seconds)
@@ -249,6 +285,8 @@ bool Fdtd1DRenderSource_Initialize (
     source->last_requested_drive = 0.0;
     source->last_applied_drive = 0.0;
     source->last_drive_saturation_ratio = 0.0;
+    source->listener_left_state = 0.0f;
+    source->listener_right_state = 0.0f;
     source->output_extraction_mode = desc->output_extraction_mode;
 
     return true;
@@ -697,6 +735,88 @@ void Fdtd1DRenderSource_Render (
                     }
                 }
             }
+        } break;
+
+        case FDTD_1D_OUTPUT_EXTRACTION_MODE_LISTENER_MODEL:
+        {
+            f32 distance_attenuation;
+            f32 lowpass_alpha;
+            bool left_is_open;
+            bool right_is_open;
+
+            ASSERT(simulation->probe_buffer != NULL);
+            ASSERT(simulation->config.probe_count >= 8);
+
+            distance_attenuation =
+                1.0f / (1.0f + (LISTENER_MODEL_DISTANCE_ATTENUATION_SCALE * LISTENER_MODEL_DISTANCE_M));
+            lowpass_alpha = ComputeOnePoleLowpassAlpha(LISTENER_MODEL_CUTOFF_HZ, sample_rate);
+            left_is_open = (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN);
+            right_is_open = (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN);
+
+            for (frame_index = 0; frame_index < block_frame_count; frame_index += 1)
+            {
+                f32 left_emission;
+                f32 left_mouth_pressure;
+                f32 left_output;
+                f32 left_raw;
+                f32 right_emission;
+                f32 right_mouth_pressure;
+                f32 right_output;
+                f32 right_raw;
+                usize output_offset;
+                usize probe_offset;
+
+                probe_offset = frame_index * (usize) simulation->config.probe_count;
+                output_offset = frame_index * (usize) channel_count;
+
+                left_emission = left_is_open ?
+                    simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_LEFT_BOUNDARY_EMISSION] :
+                    0.0f;
+                right_emission = right_is_open ?
+                    simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_RIGHT_BOUNDARY_EMISSION] :
+                    0.0f;
+                left_mouth_pressure =
+                    simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_LEFT_MOUTH_PRESSURE];
+                right_mouth_pressure =
+                    simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_PRESSURE];
+
+                left_raw = left_emission + (LISTENER_MODEL_MOUTH_PRESSURE_MIX * left_mouth_pressure);
+                right_raw = right_emission + (LISTENER_MODEL_MOUTH_PRESSURE_MIX * right_mouth_pressure);
+
+                if (left_is_open && right_is_open)
+                {
+                    left_raw += LISTENER_MODEL_CROSSFEED * right_emission;
+                    right_raw += LISTENER_MODEL_CROSSFEED * left_emission;
+                }
+                else
+                {
+                    f32 mono_raw;
+
+                    mono_raw = left_is_open ? left_raw : right_raw;
+                    left_raw = mono_raw;
+                    right_raw = mono_raw;
+                }
+
+                source->listener_left_state += lowpass_alpha * (left_raw - source->listener_left_state);
+                source->listener_right_state += lowpass_alpha * (right_raw - source->listener_right_state);
+
+                left_output = distance_attenuation * source->listener_left_state;
+                right_output = distance_attenuation * source->listener_right_state;
+                left_output = ClampF32(left_output, -LISTENER_MODEL_OUTPUT_CLAMP, LISTENER_MODEL_OUTPUT_CLAMP);
+                right_output = ClampF32(right_output, -LISTENER_MODEL_OUTPUT_CLAMP, LISTENER_MODEL_OUTPUT_CLAMP);
+
+                output[output_offset] = left_output;
+                if (channel_count > 1)
+                {
+                    output[output_offset + 1] = right_output;
+                }
+            }
+        } break;
+
+        default:
+        {
+            ASSERT(false);
+            memset(output, 0, sizeof(f32) * output_sample_count);
         } break;
     }
 }

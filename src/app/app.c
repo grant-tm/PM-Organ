@@ -28,6 +28,7 @@ typedef enum AppOutputExtractionMode
 {
     APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES = 0,
     APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION,
+    APP_OUTPUT_EXTRACTION_MODE_LISTENER_MODEL,
     APP_OUTPUT_EXTRACTION_MODE_COUNT,
 } AppOutputExtractionMode;
 
@@ -82,6 +83,7 @@ static Fdtd1DOutputExtractionMode ToRenderSourceOutputExtractionMode (AppOutputE
     {
         case APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES: return FDTD_1D_OUTPUT_EXTRACTION_MODE_RAW_PROBES;
         case APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION: return FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
+        case APP_OUTPUT_EXTRACTION_MODE_LISTENER_MODEL: return FDTD_1D_OUTPUT_EXTRACTION_MODE_LISTENER_MODEL;
         case APP_OUTPUT_EXTRACTION_MODE_COUNT: break;
     }
 
@@ -172,6 +174,7 @@ static const char *GetOutputExtractionModeName (AppOutputExtractionMode output_e
     {
         case APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES: return "Raw Probes";
         case APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION: return "Mouth Radiation";
+        case APP_OUTPUT_EXTRACTION_MODE_LISTENER_MODEL: return "Listener Model";
         case APP_OUTPUT_EXTRACTION_MODE_COUNT: break;
     }
 
@@ -798,6 +801,7 @@ int App_Run (void)
         source_coupling_mode_names[1] = GetSourceCouplingModeName(APP_SOURCE_COUPLING_MODE_VELOCITY);
         output_extraction_mode_names[0] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_RAW_PROBES);
         output_extraction_mode_names[1] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION);
+        output_extraction_mode_names[2] = GetOutputExtractionModeName(APP_OUTPUT_EXTRACTION_MODE_LISTENER_MODEL);
 
         gui_frame_desc.fdtd_source_is_active = app->fdtd_source_is_active;
         gui_frame_desc.output_is_muted = app->output_is_muted;
