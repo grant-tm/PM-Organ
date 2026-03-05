@@ -749,6 +749,80 @@ static void InitializeAreaFields (Fdtd1DState *state, const Fdtd1DDesc *desc)
         state->area_pressure[state->pressure_cell_count - 1];
 }
 
+static f32 ComputeAreaLossScale (
+    f32 reference_area_m2,
+    f32 local_area_m2,
+    f32 area_loss_strength
+)
+{
+    f32 area_ratio;
+    f32 loss_scale;
+
+    if (area_loss_strength <= 0.0f)
+    {
+        return 1.0f;
+    }
+
+    if (local_area_m2 <= 0.0f)
+    {
+        return 1.0f;
+    }
+
+    area_ratio = reference_area_m2 / local_area_m2;
+    loss_scale = powf(area_ratio, area_loss_strength);
+    return ClampF32(loss_scale, 0.25f, 4.0f);
+}
+
+static void InitializeGeometryAwareLossFields (Fdtd1DState *state, const Fdtd1DDesc *desc)
+{
+    f32 area_loss_strength;
+    f32 reference_area_m2;
+    u32 pressure_index;
+    u32 velocity_index;
+
+    ASSERT(state != NULL);
+    ASSERT(desc != NULL);
+    ASSERT(state->pressure_loss != NULL);
+    ASSERT(state->velocity_loss != NULL);
+    ASSERT(state->area_pressure != NULL);
+    ASSERT(state->area_velocity != NULL);
+
+    reference_area_m2 = (f32) desc->area_loss_reference_m2;
+    area_loss_strength = (f32) desc->area_loss_strength;
+
+    for (pressure_index = 0; pressure_index < state->pressure_cell_count; pressure_index += 1)
+    {
+        f32 loss_scale;
+
+        loss_scale = ComputeAreaLossScale(
+            reference_area_m2,
+            state->area_pressure[pressure_index],
+            area_loss_strength
+        );
+        state->pressure_loss[pressure_index] = ClampF32(
+            (f32) desc->uniform_loss * loss_scale,
+            0.0f,
+            1.0f
+        );
+    }
+
+    for (velocity_index = 0; velocity_index < state->velocity_cell_count; velocity_index += 1)
+    {
+        f32 loss_scale;
+
+        loss_scale = ComputeAreaLossScale(
+            reference_area_m2,
+            state->area_velocity[velocity_index],
+            area_loss_strength
+        );
+        state->velocity_loss[velocity_index] = ClampF32(
+            (f32) desc->uniform_loss * loss_scale,
+            0.0f,
+            1.0f
+        );
+    }
+}
+
 static void InitializePressureUpdateCoefficients (Fdtd1DState *state)
 {
     f64 pressure_update_numerator;
@@ -1244,6 +1318,16 @@ bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc)
         return false;
     }
 
+    if (desc->area_loss_reference_m2 <= 0.0)
+    {
+        return false;
+    }
+
+    if ((desc->area_loss_strength < 0.0) || (desc->area_loss_strength > 2.0))
+    {
+        return false;
+    }
+
     if (ValidateBoundary(&desc->left_boundary) == false)
     {
         return false;
@@ -1410,8 +1494,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     dt = state->dt;
     velocity_update_coeff = dt / (desc->density_kg_per_m3 * desc->dx);
     InitializeAreaFields(state, desc);
-    InitializeUniformField(state->pressure_loss, desc->pressure_cell_count, (f32) desc->uniform_loss);
-    InitializeUniformField(state->velocity_loss, desc->velocity_cell_count, (f32) desc->uniform_loss);
+    InitializeGeometryAwareLossFields(state, desc);
     state->pressure_high_frequency_loss = (f32) desc->uniform_high_frequency_loss;
     state->velocity_high_frequency_loss = (f32) desc->uniform_high_frequency_loss;
     state->boundary_loss = (f32) desc->uniform_boundary_loss;

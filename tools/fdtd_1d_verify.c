@@ -149,6 +149,8 @@ typedef struct VerificationSettings
     f64 nonlinear_mouth_feedback_scale_start;
     f64 nonlinear_mouth_feedback_scale_end;
     f64 nonlinear_mouth_feedback_scale_step;
+    f64 area_loss_reference_m2;
+    f64 area_loss_strength;
 } VerificationSettings;
 
 typedef struct VerificationRunSummary
@@ -435,6 +437,8 @@ static void ConfigureSolver (
     desc->uniform_high_frequency_loss = 0.01;
     desc->uniform_boundary_loss = 0.00008;
     desc->uniform_boundary_high_frequency_loss = 0.015;
+    desc->area_loss_reference_m2 = settings->area_loss_reference_m2;
+    desc->area_loss_strength = settings->area_loss_strength;
     desc->area_segment_count = 0;
     desc->area_segment_descs = NULL;
     switch (settings->preset)
@@ -678,6 +682,8 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->nonlinear_mouth_feedback_scale_start = 0.5;
     settings->nonlinear_mouth_feedback_scale_end = 1.5;
     settings->nonlinear_mouth_feedback_scale_step = 0.25;
+    settings->area_loss_reference_m2 = 0.01;
+    settings->area_loss_strength = 0.35;
 }
 
 static void ParseArguments (int argc, char **argv, VerificationSettings *settings)
@@ -850,6 +856,16 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         }
 
         if (TryParseDoubleValue(argument, "mouth_feedback_scale_step=", &settings->nonlinear_mouth_feedback_scale_step))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "area_loss_reference=", &settings->area_loss_reference_m2))
+        {
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "area_loss_strength=", &settings->area_loss_strength))
         {
             continue;
         }
@@ -2397,6 +2413,12 @@ int main (int argc, char **argv)
     );
     printf("  boundary_hf_loss:       %.6f\n",
         solver_desc.uniform_boundary_high_frequency_loss
+    );
+    printf("  area_loss_reference:    %.6f\n",
+        solver_desc.area_loss_reference_m2
+    );
+    printf("  area_loss_strength:     %.6f\n",
+        solver_desc.area_loss_strength
     );
     printf("  left_boundary:          %s\n",
         GetBoundaryTypeName(solver_desc.left_boundary.type)
