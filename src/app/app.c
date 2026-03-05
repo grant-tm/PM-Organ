@@ -136,19 +136,30 @@ static const RankNoteBinding RANK_NOTE_BINDINGS[RANK_NOTE_COUNT] =
 static const f64 RANK_NOTE_SOURCE_RATIOS[RANK_NOTE_COUNT] =
 {
     28.0 / 128.0,
-    29.0 / 128.0,
     30.0 / 128.0,
-    31.0 / 128.0,
     32.0 / 128.0,
+    33.0 / 128.0,
     34.0 / 128.0,
-    34.0 / 128.0,
-    34.0 / 128.0,
+    35.0 / 128.0,
+    36.0 / 128.0,
+    37.0 / 128.0,
 };
 
 static const u32 RANK_NOTE_CELL_COUNTS[RANK_NOTE_COUNT] =
 {
     38, 34, 30, 28, 25, 23, 20, 19
 };
+
+static Fdtd1DJetLabiumParameters GetJetProfileParameters (AppJetProfile jet_profile);
+
+static Fdtd1DJetLabiumParameters GetRankJetParameters (
+    AppJetProfile jet_profile,
+    u32 rank_note_index
+)
+{
+    ASSERT(rank_note_index < RANK_NOTE_COUNT);
+    return GetJetProfileParameters(jet_profile);
+}
 
 static Fdtd1DOutputExtractionMode ToRenderSourceOutputExtractionMode (AppOutputExtractionMode app_mode)
 {
@@ -324,6 +335,7 @@ static Fdtd1DJetLabiumParameters GetJetProfileParameters (AppJetProfile jet_prof
 
     return parameters;
 }
+
 
 static void UpdateWindowTitle (AppState *app)
 {
@@ -863,22 +875,25 @@ static void ApplyExcitationSettingsToSources (AppState *app)
 
 static void ApplyJetProfileToSources (AppState *app)
 {
-    Fdtd1DJetLabiumParameters parameters;
+    Fdtd1DJetLabiumParameters base_parameters;
     u32 note_index;
     FdtdPresetType preset_type;
 
     ASSERT(app != NULL);
 
-    parameters = GetJetProfileParameters(app->active_jet_profile);
+    base_parameters = GetJetProfileParameters(app->active_jet_profile);
 
     for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
     {
-        Fdtd1DRenderSource_SetJetLabiumParameters(&app->fdtd_render_sources[preset_type], &parameters);
+        Fdtd1DRenderSource_SetJetLabiumParameters(&app->fdtd_render_sources[preset_type], &base_parameters);
     }
 
     for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
     {
-        Fdtd1DRenderSource_SetJetLabiumParameters(&app->rank_render_sources[note_index], &parameters);
+        Fdtd1DJetLabiumParameters rank_parameters;
+
+        rank_parameters = GetRankJetParameters(app->active_jet_profile, note_index);
+        Fdtd1DRenderSource_SetJetLabiumParameters(&app->rank_render_sources[note_index], &rank_parameters);
     }
 }
 

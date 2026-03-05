@@ -353,6 +353,13 @@ typedef struct OrganVoicingNoteResult
     f64 harmonic_to_noise_db;
     f64 f0_drift_cents;
     f64 voicing_score;
+    f64 delta_low_band_ratio;
+    f64 delta_mid_band_ratio;
+    f64 delta_high_band_ratio;
+    f64 delta_attack_ms;
+    f64 delta_hnr_db;
+    f64 delta_odd_even_db;
+    f64 trend_score;
 } OrganVoicingNoteResult;
 
 static bool WriteOrganVoicingSuiteCsv (
@@ -377,7 +384,9 @@ static bool WriteOrganVoicingSuiteCsv (
         file,
         "note_index,semitone_offset,pressure_cells,source_cell,f0_hz,ratio_error_percent,"
         "attack_10_to_90_ms,settle_ms,low_band_percent,mid_band_percent,high_band_percent,"
-        "odd_even_balance_db,harmonic_to_noise_db,f0_drift_cents,voicing_score\n"
+        "odd_even_balance_db,harmonic_to_noise_db,f0_drift_cents,voicing_score,"
+        "delta_low_band_percent,delta_mid_band_percent,delta_high_band_percent,delta_attack_ms,"
+        "delta_hnr_db,delta_odd_even_db,trend_score\n"
     );
 
     for (result_index = 0; result_index < result_count; result_index += 1)
@@ -387,7 +396,8 @@ static bool WriteOrganVoicingSuiteCsv (
         result = &results[result_index];
         fprintf(
             file,
-            "%u,%u,%u,%u,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n",
+            "%u,%u,%u,%u,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,"
+            "%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n",
             result->note_index,
             result->semitone_offset,
             result->pressure_cell_count,
@@ -402,7 +412,14 @@ static bool WriteOrganVoicingSuiteCsv (
             result->odd_even_balance_db,
             result->harmonic_to_noise_db,
             result->f0_drift_cents,
-            result->voicing_score
+            result->voicing_score,
+            100.0 * result->delta_low_band_ratio,
+            100.0 * result->delta_mid_band_ratio,
+            100.0 * result->delta_high_band_ratio,
+            result->delta_attack_ms,
+            result->delta_hnr_db,
+            result->delta_odd_even_db,
+            result->trend_score
         );
     }
 
@@ -499,6 +516,59 @@ static f64 ComputeOrganVoicingScore (const OrganVoicingNoteResult *result)
     total_penalty = ClampUnitF64(total_penalty);
 
     return 100.0 * (1.0 - total_penalty);
+}
+
+static f64 ComputeOrganTrendScore (const OrganVoicingNoteResult *previous, const OrganVoicingNoteResult *current)
+{
+    f64 band_penalty;
+    f64 attack_penalty;
+    f64 hnr_penalty;
+    f64 odd_even_penalty;
+    f64 total_penalty;
+
+    ASSERT(previous != NULL);
+    ASSERT(current != NULL);
+
+    band_penalty =
+        fabs(current->low_band_ratio - previous->low_band_ratio) / 0.12 +
+        fabs(current->mid_band_ratio - previous->mid_band_ratio) / 0.12 +
+        fabs(current->high_band_ratio - previous->high_band_ratio) / 0.12;
+    band_penalty *= 0.33;
+    band_penalty = ClampUnitF64(band_penalty);
+
+    if ((current->attack_10_to_90_ms < 0.0) || (previous->attack_10_to_90_ms < 0.0))
+    {
+        attack_penalty = 0.35;
+    }
+    else
+    {
+        attack_penalty = fabs(current->attack_10_to_90_ms - previous->attack_10_to_90_ms) / 120.0;
+    }
+    attack_penalty = ClampUnitF64(attack_penalty);
+
+    hnr_penalty = fabs(current->harmonic_to_noise_db - previous->harmonic_to_noise_db) / 8.0;
+    hnr_penalty = ClampUnitF64(hnr_penalty);
+
+    odd_even_penalty = fabs(current->odd_even_balance_db - previous->odd_even_balance_db) / 12.0;
+    odd_even_penalty = ClampUnitF64(odd_even_penalty);
+
+    total_penalty =
+        0.45 * band_penalty +
+        0.25 * attack_penalty +
+        0.20 * hnr_penalty +
+        0.10 * odd_even_penalty;
+    total_penalty = ClampUnitF64(total_penalty);
+
+    return 100.0 * (1.0 - total_penalty);
+}
+
+static void ApplyRankJetCompensation (
+    Fdtd1DJetLabiumParameters *parameters,
+    u32 semitone_offset
+)
+{
+    ASSERT(parameters != NULL);
+    (void) semitone_offset;
 }
 
 static void AnalyzeOrganBandRatios (
@@ -4199,13 +4269,13 @@ int main (int argc, char **argv)
         static const f64 STAGE6_SOURCE_RATIOS[] =
         {
             28.0 / 128.0,
-            29.0 / 128.0,
             30.0 / 128.0,
-            31.0 / 128.0,
             32.0 / 128.0,
+            33.0 / 128.0,
             34.0 / 128.0,
-            34.0 / 128.0,
-            34.0 / 128.0
+            35.0 / 128.0,
+            36.0 / 128.0,
+            37.0 / 128.0
         };
         u32 note_index;
         u32 suite_count;
@@ -4264,6 +4334,7 @@ int main (int argc, char **argv)
             suite_settings.uniform_loss *= (1.0 + (0.20 * note_ratio));
             suite_settings.uniform_high_frequency_loss *= (1.0 + (0.35 * note_ratio));
             suite_settings.uniform_boundary_high_frequency_loss *= (1.0 + (0.45 * note_ratio));
+            ApplyRankJetCompensation(&suite_settings.jet_labium_parameters, semitone_offset);
 
             if (RunVerification(&suite_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
             {
@@ -4409,13 +4480,13 @@ int main (int argc, char **argv)
         static const f64 ORGAN_SOURCE_RATIOS[] =
         {
             28.0 / 128.0,
-            29.0 / 128.0,
             30.0 / 128.0,
-            31.0 / 128.0,
             32.0 / 128.0,
+            33.0 / 128.0,
             34.0 / 128.0,
-            34.0 / 128.0,
-            34.0 / 128.0
+            35.0 / 128.0,
+            36.0 / 128.0,
+            37.0 / 128.0
         };
         u32 note_index;
         u32 suite_count;
@@ -4423,6 +4494,10 @@ int main (int argc, char **argv)
         f64 score_sum;
         f64 score_min;
         f64 score_max;
+        f64 trend_score_sum;
+        f64 trend_score_min;
+        f64 trend_score_max;
+        u32 trend_count;
         bool has_base_f0;
 
         suite_count = 0;
@@ -4430,6 +4505,10 @@ int main (int argc, char **argv)
         score_sum = 0.0;
         score_min = 1000.0;
         score_max = -1000.0;
+        trend_score_sum = 0.0;
+        trend_score_min = 1000.0;
+        trend_score_max = -1000.0;
+        trend_count = 0;
         has_base_f0 = false;
 
         for (note_index = 0; note_index < ARRAY_COUNT(ORGAN_SEMITONE_OFFSETS); note_index += 1)
@@ -4465,6 +4544,7 @@ int main (int argc, char **argv)
             suite_settings.source_index_was_overridden = true;
             suite_settings.source_cell_index = source_cell_index;
             suite_settings.pressure_cell_count = pressure_cell_count;
+            ApplyRankJetCompensation(&suite_settings.jet_labium_parameters, ORGAN_SEMITONE_OFFSETS[note_index]);
 
             if (RunVerification(&suite_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
             {
@@ -4520,6 +4600,13 @@ int main (int argc, char **argv)
             }
             result->ratio_error_percent = 0.0;
             result->voicing_score = 0.0;
+            result->delta_low_band_ratio = 0.0;
+            result->delta_mid_band_ratio = 0.0;
+            result->delta_high_band_ratio = 0.0;
+            result->delta_attack_ms = 0.0;
+            result->delta_hnr_db = 0.0;
+            result->delta_odd_even_db = 0.0;
+            result->trend_score = 100.0;
 
             if ((note_index == 0) && (result->measured_f0_hz > 0.0))
             {
@@ -4565,6 +4652,42 @@ int main (int argc, char **argv)
             }
         }
 
+        for (note_index = 1; note_index < suite_count; note_index += 1)
+        {
+            OrganVoicingNoteResult *previous;
+            OrganVoicingNoteResult *current;
+
+            previous = &organ_voicing_results[note_index - 1];
+            current = &organ_voicing_results[note_index];
+
+            current->delta_low_band_ratio = current->low_band_ratio - previous->low_band_ratio;
+            current->delta_mid_band_ratio = current->mid_band_ratio - previous->mid_band_ratio;
+            current->delta_high_band_ratio = current->high_band_ratio - previous->high_band_ratio;
+            current->delta_hnr_db = current->harmonic_to_noise_db - previous->harmonic_to_noise_db;
+            current->delta_odd_even_db = current->odd_even_balance_db - previous->odd_even_balance_db;
+
+            if ((current->attack_10_to_90_ms >= 0.0) && (previous->attack_10_to_90_ms >= 0.0))
+            {
+                current->delta_attack_ms = current->attack_10_to_90_ms - previous->attack_10_to_90_ms;
+            }
+            else
+            {
+                current->delta_attack_ms = 0.0;
+            }
+
+            current->trend_score = ComputeOrganTrendScore(previous, current);
+            trend_score_sum += current->trend_score;
+            if (current->trend_score < trend_score_min)
+            {
+                trend_score_min = current->trend_score;
+            }
+            if (current->trend_score > trend_score_max)
+            {
+                trend_score_max = current->trend_score;
+            }
+            trend_count += 1;
+        }
+
         printf("FDTD 1D Organ Voicing Suite (Report-Only)\n\n");
         printf("Setup\n");
         printf("  preset_family:          open-rigid\n");
@@ -4574,14 +4697,14 @@ int main (int argc, char **argv)
         printf("  semitone_offsets:       0,2,4,5,7,9,11,12\n");
         printf("\n");
         printf("Per-Note Metrics\n");
-        printf("  note  f0_hz    ratio_err%%  atk_ms   set_ms   low%%   mid%%   high%%  odd_even_db  hnr_db   drift_c  score\n");
+        printf("  note  f0_hz    ratio_err%%  atk_ms   set_ms   low%%   mid%%   high%%  odd_even_db  hnr_db   drift_c  score  trend\n");
         for (note_index = 0; note_index < suite_count; note_index += 1)
         {
             OrganVoicingNoteResult *result;
 
             result = &organ_voicing_results[note_index];
             printf(
-                "  %-5u %-8.2f %-11.3f %-8.2f %-8.2f %-6.2f %-6.2f %-6.2f %-12.2f %-8.2f %-8.3f %-6.2f\n",
+                "  %-5u %-8.2f %-11.3f %-8.2f %-8.2f %-6.2f %-6.2f %-6.2f %-12.2f %-8.2f %-8.3f %-6.2f %-6.2f\n",
                 result->note_index,
                 result->measured_f0_hz,
                 result->ratio_error_percent,
@@ -4593,7 +4716,8 @@ int main (int argc, char **argv)
                 result->odd_even_balance_db,
                 result->harmonic_to_noise_db,
                 result->f0_drift_cents,
-                result->voicing_score
+                result->voicing_score,
+                result->trend_score
             );
         }
         printf("\n");
@@ -4603,6 +4727,13 @@ int main (int argc, char **argv)
         );
         printf("  min_score:              %.2f\n", (suite_count > 0) ? score_min : 0.0);
         printf("  max_score:              %.2f\n", (suite_count > 0) ? score_max : 0.0);
+        printf("\n");
+        printf("Trend Summary\n");
+        printf("  mean_trend_score:       %.2f\n",
+            (trend_count > 0) ? (trend_score_sum / (f64) trend_count) : 0.0
+        );
+        printf("  min_trend_score:        %.2f\n", (trend_count > 0) ? trend_score_min : 0.0);
+        printf("  max_trend_score:        %.2f\n", (trend_count > 0) ? trend_score_max : 0.0);
         printf("\n");
         printf("Notes\n");
         printf("  report_only:            yes\n");
