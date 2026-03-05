@@ -2710,11 +2710,11 @@ static void AnalyzeListenerModelFromCapture (
     VerificationRunSummary *summary
 )
 {
-    static const f32 LISTENER_DISTANCE_M = 4.0f;
+    static const f32 LISTENER_DISTANCE_M = 4.5f;
     static const f32 LISTENER_DISTANCE_ATTENUATION_SCALE = 0.35f;
-    static const f32 LISTENER_MOUTH_PRESSURE_MIX = 0.22f;
-    static const f32 LISTENER_CROSSFEED = 0.10f;
-    static const f32 LISTENER_CUTOFF_HZ = 3200.0f;
+    static const f32 LISTENER_MOUTH_PRESSURE_MIX = 0.18f;
+    static const f32 LISTENER_CROSSFEED = 0.12f;
+    static const f32 LISTENER_CUTOFF_HZ = 2800.0f;
     static const f64 LISTENER_MIN_ACTIVITY_RMS = 1.0e-6;
     static const f64 LISTENER_MIN_STEREO_SPREAD_RMS = 1.0e-5;
     static const f64 LISTENER_MAX_MONO_SPREAD_RMS = 1.0e-5;
