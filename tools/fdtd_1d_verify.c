@@ -156,6 +156,7 @@ typedef struct VerificationSettings
     bool run_parameter_sweep;
     bool run_stage4_suite;
     bool run_speech_analysis;
+    bool run_voicing_loop;
     const char *summary_csv_path;
     u32 block_count;
     u32 length_sweep_start_cell_count;
@@ -485,6 +486,47 @@ static bool EvaluateSpeechChiffToSustainGate (f64 chiff_to_sustain_rms_ratio)
     static const f64 MAX_CHIFF_RATIO = 2.5;
     return (chiff_to_sustain_rms_ratio >= MIN_CHIFF_RATIO) &&
            (chiff_to_sustain_rms_ratio <= MAX_CHIFF_RATIO);
+}
+
+static bool EvaluateVoicingSustainGate (f64 late_to_early_rms_ratio)
+{
+    static const f64 VOICING_SUSTAIN_RATIO_MIN = 0.30;
+    static const f64 VOICING_SUSTAIN_RATIO_MAX = 1.40;
+    return (late_to_early_rms_ratio >= VOICING_SUSTAIN_RATIO_MIN) &&
+           (late_to_early_rms_ratio <= VOICING_SUSTAIN_RATIO_MAX);
+}
+
+static bool EvaluateVoicingAttackGate (bool attack_was_found, f64 attack_10_to_90_ms)
+{
+    static const f64 VOICING_ATTACK_MIN_MS = 5.0;
+    static const f64 VOICING_ATTACK_MAX_MS = 300.0;
+
+    if (attack_was_found == false)
+    {
+        return false;
+    }
+
+    return (attack_10_to_90_ms >= VOICING_ATTACK_MIN_MS) &&
+           (attack_10_to_90_ms <= VOICING_ATTACK_MAX_MS);
+}
+
+static bool EvaluateVoicingHarmonicBalanceGate (
+    f64 late_harmonic_energy_ratio,
+    f64 harmonic_decay_slope_db_per_harmonic
+)
+{
+    static const f64 VOICING_HARMONIC_RATIO_MIN = 0.02;
+    static const f64 VOICING_HARMONIC_RATIO_MAX = 0.50;
+    static const f64 VOICING_HARMONIC_SLOPE_MIN_DB = -10.0;
+    static const f64 VOICING_HARMONIC_SLOPE_MAX_DB = 2.0;
+    bool ratio_ok;
+    bool slope_ok;
+
+    ratio_ok = (late_harmonic_energy_ratio >= VOICING_HARMONIC_RATIO_MIN) &&
+        (late_harmonic_energy_ratio <= VOICING_HARMONIC_RATIO_MAX);
+    slope_ok = (harmonic_decay_slope_db_per_harmonic >= VOICING_HARMONIC_SLOPE_MIN_DB) &&
+        (harmonic_decay_slope_db_per_harmonic <= VOICING_HARMONIC_SLOPE_MAX_DB);
+    return ratio_ok && slope_ok;
 }
 
 static void ConfigureSolver (
@@ -850,6 +892,7 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->run_parameter_sweep = false;
     settings->run_stage4_suite = false;
     settings->run_speech_analysis = false;
+    settings->run_voicing_loop = false;
     settings->summary_csv_path = NULL;
     settings->block_count = 256;
     settings->length_sweep_start_cell_count = 64;
@@ -1017,6 +1060,12 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         if ((_stricmp(argument, "speech-analysis") == 0) || (_stricmp(argument, "speech") == 0))
         {
             settings->run_speech_analysis = true;
+            continue;
+        }
+
+        if ((_stricmp(argument, "voicing-loop") == 0) || (_stricmp(argument, "voicing") == 0))
+        {
+            settings->run_voicing_loop = true;
             continue;
         }
 
@@ -3158,6 +3207,17 @@ int main (int argc, char **argv)
     InitializeVerificationSettings(&settings);
     ParseArguments(argc, argv, &settings);
 
+    if (settings.run_voicing_loop)
+    {
+        settings.excitation_type = VERIFICATION_EXCITATION_TYPE_JET_LABIUM;
+        settings.run_speech_analysis = true;
+        settings.probe_type = FDTD_1D_PROBE_TYPE_PRESSURE;
+        if (settings.block_count < 512)
+        {
+            settings.block_count = 512;
+        }
+    }
+
     if (settings.run_length_sweep)
     {
         sweep_result_count = 0;
@@ -4122,6 +4182,67 @@ int main (int argc, char **argv)
             );
             printf("\n");
         }
+    }
+
+    if (settings.run_voicing_loop)
+    {
+        bool sustain_gate_ok;
+        bool attack_gate_ok;
+        bool harmonic_gate_ok;
+        bool stability_gate_ok;
+        bool voicing_overall_ok;
+
+        sustain_gate_ok = EvaluateVoicingSustainGate(summary.sustained.late_to_early_rms_ratio);
+        attack_gate_ok = EvaluateVoicingAttackGate(summary.speech.attack_was_found, summary.speech.attack_10_to_90_ms);
+        harmonic_gate_ok = EvaluateVoicingHarmonicBalanceGate(
+            summary.sustained.late_harmonic_energy_ratio,
+            summary.sustained.harmonic_decay_slope_db_per_harmonic
+        );
+        stability_gate_ok =
+            EvaluateDominantFrequencyDriftGate(summary.sustained.dominant_frequency_drift_ratio) &&
+            EvaluateEnergyDriftGate(summary.energy.final_energy - summary.energy.initial_energy);
+        voicing_overall_ok = sustain_gate_ok && attack_gate_ok && harmonic_gate_ok && stability_gate_ok;
+
+        printf("Voicing Loop\n");
+        printf("  mode:                   objective-check\n");
+        printf("  target_sustain_ratio:   [0.30, 1.40]\n");
+        printf("  target_attack_ms:       [5.0, 300.0]\n");
+        printf("  target_harmonic_ratio:  [0.02, 0.50]\n");
+        printf("  target_harmonic_slope:  [-10.0, 2.0] dB/harmonic\n");
+        printf("  sustain_ratio:          %.6f\n",
+            summary.sustained.late_to_early_rms_ratio
+        );
+        printf("  attack_10_to_90_ms:     ");
+        if (summary.speech.attack_was_found)
+        {
+            printf("%.3f\n", summary.speech.attack_10_to_90_ms);
+        }
+        else
+        {
+            printf("not found\n");
+        }
+        printf("  harmonic_ratio:         %.6f\n",
+            summary.sustained.late_harmonic_energy_ratio
+        );
+        printf("  harmonic_slope_db:      %.3f\n",
+            summary.sustained.harmonic_decay_slope_db_per_harmonic
+        );
+        printf("  sustain_gate:           %s\n",
+            sustain_gate_ok ? "pass" : "warn"
+        );
+        printf("  attack_gate:            %s\n",
+            attack_gate_ok ? "pass" : "warn"
+        );
+        printf("  harmonic_balance_gate:  %s\n",
+            harmonic_gate_ok ? "pass" : "warn"
+        );
+        printf("  stability_gate:         %s\n",
+            stability_gate_ok ? "pass" : "warn"
+        );
+        printf("  overall_voicing_gate:   %s\n",
+            voicing_overall_ok ? "pass" : "warn"
+        );
+        printf("\n");
     }
 
     if (settings.csv_output_path != NULL)
