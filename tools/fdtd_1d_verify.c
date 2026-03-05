@@ -432,6 +432,7 @@ static void ConfigureSolver (
     desc->courant_number = TEST_COURANT_NUMBER;
     desc->uniform_area_m2 = 0.01;
     desc->uniform_loss = 0.00005;
+    desc->uniform_high_frequency_loss = 0.01;
     desc->area_segment_count = 0;
     desc->area_segment_descs = NULL;
     switch (settings->preset)
@@ -2382,6 +2383,12 @@ int main (int argc, char **argv)
     );
     printf("  courant:                %.6f\n",
         solver_desc.courant_number
+    );
+    printf("  uniform_loss:           %.6f\n",
+        solver_desc.uniform_loss
+    );
+    printf("  hf_loss:                %.6f\n",
+        solver_desc.uniform_high_frequency_loss
     );
     printf("  left_boundary:          %s\n",
         GetBoundaryTypeName(solver_desc.left_boundary.type)

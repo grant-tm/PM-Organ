@@ -249,6 +249,14 @@ static void ResetStateCallback (Simulation *simulation)
 
     memset(state->pressure, 0, sizeof(f32) * (usize) state->pressure_cell_count);
     memset(state->velocity, 0, sizeof(f32) * (usize) state->velocity_cell_count);
+    if (state->pressure_previous != NULL)
+    {
+        memset(state->pressure_previous, 0, sizeof(f32) * (usize) state->pressure_cell_count);
+    }
+    if (state->velocity_previous != NULL)
+    {
+        memset(state->velocity_previous, 0, sizeof(f32) * (usize) state->velocity_cell_count);
+    }
     if ((state->source_jet_state != NULL) && (state->source_count > 0))
     {
         memset(state->source_jet_state, 0, sizeof(f32) * (usize) state->source_count);
@@ -288,6 +296,28 @@ static f32 ClampF32 (f32 value, f32 min_value, f32 max_value)
     }
 
     return value;
+}
+
+static f32 ApplyFrequencyDependentLoss (
+    f32 current_sample,
+    f32 *previous_sample,
+    f32 high_frequency_loss
+)
+{
+    f32 delta_sample;
+
+    ASSERT(previous_sample != NULL);
+
+    if (high_frequency_loss <= 0.0f)
+    {
+        *previous_sample = current_sample;
+        return current_sample;
+    }
+
+    delta_sample = current_sample - (*previous_sample);
+    current_sample -= high_frequency_loss * delta_sample;
+    *previous_sample = current_sample;
+    return current_sample;
 }
 
 static bool ValidateNonlinearMouthParameters (const Fdtd1DNonlinearMouthParameters *parameters)
@@ -802,6 +832,11 @@ static void UpdateVelocityField (Fdtd1DState *state)
         state->velocity[velocity_index] -= state->velocity_update_coeff[velocity_index] *
             (state->pressure[velocity_index] - state->pressure[velocity_index - 1]);
         state->velocity[velocity_index] *= (1.0f - state->velocity_loss[velocity_index]);
+        state->velocity[velocity_index] = ApplyFrequencyDependentLoss(
+            state->velocity[velocity_index],
+            &state->velocity_previous[velocity_index],
+            state->velocity_high_frequency_loss
+        );
     }
 
     switch (state->left_boundary_type)
@@ -809,6 +844,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
         case FDTD_1D_BOUNDARY_TYPE_RIGID:
         {
             state->velocity[0] = 0.0f;
+            state->velocity_previous[0] = 0.0f;
         } break;
 
         case FDTD_1D_BOUNDARY_TYPE_OPEN:
@@ -836,6 +872,11 @@ static void UpdateVelocityField (Fdtd1DState *state)
 
             state->velocity[0] = (incoming_pressure - outgoing_pressure) / characteristic_impedance;
             state->velocity[0] *= (1.0f - state->velocity_loss[0]);
+            state->velocity[0] = ApplyFrequencyDependentLoss(
+                state->velocity[0],
+                &state->velocity_previous[0],
+                state->velocity_high_frequency_loss
+            );
         } break;
     }
 
@@ -844,6 +885,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
         case FDTD_1D_BOUNDARY_TYPE_RIGID:
         {
             state->velocity[state->velocity_cell_count - 1] = 0.0f;
+            state->velocity_previous[state->velocity_cell_count - 1] = 0.0f;
         } break;
 
         case FDTD_1D_BOUNDARY_TYPE_OPEN:
@@ -876,6 +918,11 @@ static void UpdateVelocityField (Fdtd1DState *state)
                 (outgoing_pressure - incoming_pressure) / characteristic_impedance;
             state->velocity[state->velocity_cell_count - 1] *=
                 (1.0f - state->velocity_loss[state->velocity_cell_count - 1]);
+            state->velocity[state->velocity_cell_count - 1] = ApplyFrequencyDependentLoss(
+                state->velocity[state->velocity_cell_count - 1],
+                &state->velocity_previous[state->velocity_cell_count - 1],
+                state->velocity_high_frequency_loss
+            );
         } break;
     }
 }
@@ -892,6 +939,11 @@ static void UpdatePressureField (Fdtd1DState *state)
             ((state->area_velocity[pressure_index + 1] * state->velocity[pressure_index + 1]) -
              (state->area_velocity[pressure_index] * state->velocity[pressure_index]));
         state->pressure[pressure_index] *= (1.0f - state->pressure_loss[pressure_index]);
+        state->pressure[pressure_index] = ApplyFrequencyDependentLoss(
+            state->pressure[pressure_index],
+            &state->pressure_previous[pressure_index],
+            state->pressure_high_frequency_loss
+        );
     }
 }
 
@@ -1176,6 +1228,11 @@ bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc)
         return false;
     }
 
+    if ((desc->uniform_high_frequency_loss < 0.0) || (desc->uniform_high_frequency_loss > 1.0))
+    {
+        return false;
+    }
+
     if (ValidateBoundary(&desc->left_boundary) == false)
     {
         return false;
@@ -1282,6 +1339,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     state->area_velocity = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
     state->pressure_loss = MEMORY_ARENA_PUSH_ARRAY(arena, desc->pressure_cell_count, f32);
     state->velocity_loss = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
+    state->pressure_previous = MEMORY_ARENA_PUSH_ARRAY(arena, desc->pressure_cell_count, f32);
+    state->velocity_previous = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
     state->pressure_update_coeff = MEMORY_ARENA_PUSH_ARRAY(arena, desc->pressure_cell_count, f32);
     state->velocity_update_coeff = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
 
@@ -1291,6 +1350,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
         (state->area_velocity == NULL) ||
         (state->pressure_loss == NULL) ||
         (state->velocity_loss == NULL) ||
+        (state->pressure_previous == NULL) ||
+        (state->velocity_previous == NULL) ||
         (state->pressure_update_coeff == NULL) ||
         (state->velocity_update_coeff == NULL))
     {
@@ -1340,6 +1401,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     InitializeAreaFields(state, desc);
     InitializeUniformField(state->pressure_loss, desc->pressure_cell_count, (f32) desc->uniform_loss);
     InitializeUniformField(state->velocity_loss, desc->velocity_cell_count, (f32) desc->uniform_loss);
+    state->pressure_high_frequency_loss = (f32) desc->uniform_high_frequency_loss;
+    state->velocity_high_frequency_loss = (f32) desc->uniform_high_frequency_loss;
     InitializeUniformField(state->velocity_update_coeff, desc->velocity_cell_count, (f32) velocity_update_coeff);
     InitializePressureUpdateCoefficients(state);
 
