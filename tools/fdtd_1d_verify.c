@@ -80,6 +80,9 @@ typedef struct SustainedAnalysisResult
     f64 late_spectral_flatness;
     f64 late_harmonic_energy_ratio;
     f64 late_spectral_flux;
+    f64 harmonic_decay_low_band_db;
+    f64 harmonic_decay_high_band_db;
+    f64 harmonic_decay_slope_db_per_harmonic;
 } SustainedAnalysisResult;
 
 typedef struct SpeechAnalysisResult
@@ -1443,6 +1446,193 @@ static f64 ComputeSpectralFlux (
     return sqrt(flux_sum / (energy_sum_a + EPSILON));
 }
 
+static void ComputeHarmonicDecayMetrics (
+    const SimulationOfflineCapture *capture,
+    const Fdtd1DDesc *desc,
+    u32 analysis_channel_index,
+    u32 early_start_frame,
+    u32 early_end_frame,
+    u32 late_start_frame,
+    u32 late_end_frame,
+    f64 *low_band_db,
+    f64 *high_band_db,
+    f64 *slope_db_per_harmonic
+)
+{
+    static const f64 EPSILON = 1e-12;
+    f64 fundamental_frequency_hz;
+    f64 x_mean;
+    f64 y_mean;
+    f64 xx_sum;
+    f64 xy_sum;
+    f64 low_sum;
+    f64 high_sum;
+    u32 low_count;
+    u32 high_count;
+    u32 used_count;
+    u32 harmonic_index;
+
+    ASSERT(capture != NULL);
+    ASSERT(desc != NULL);
+    ASSERT(low_band_db != NULL);
+    ASSERT(high_band_db != NULL);
+    ASSERT(slope_db_per_harmonic != NULL);
+
+    *low_band_db = 0.0;
+    *high_band_db = 0.0;
+    *slope_db_per_harmonic = 0.0;
+
+    fundamental_frequency_hz = GetFundamentalFrequencyHz(desc);
+    if (fundamental_frequency_hz <= 0.0)
+    {
+        return;
+    }
+
+    x_mean = 0.0;
+    y_mean = 0.0;
+    xx_sum = 0.0;
+    xy_sum = 0.0;
+    low_sum = 0.0;
+    high_sum = 0.0;
+    low_count = 0;
+    high_count = 0;
+    used_count = 0;
+
+    for (harmonic_index = 1; harmonic_index <= 8; harmonic_index += 1)
+    {
+        f64 frequency_hz;
+        f64 harmonic_multiplier;
+        f64 early_magnitude;
+        f64 late_magnitude;
+        f64 decay_db;
+        f64 x;
+
+        if (((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN) &&
+             (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID)) ||
+            ((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID) &&
+             (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)))
+        {
+            harmonic_multiplier = (f64) (2 * (i32) harmonic_index - 1);
+        }
+        else
+        {
+            harmonic_multiplier = (f64) harmonic_index;
+        }
+
+        frequency_hz = fundamental_frequency_hz * harmonic_multiplier;
+        if (frequency_hz >= (0.5 * (f64) desc->sample_rate - 20.0))
+        {
+            continue;
+        }
+
+        early_magnitude = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            early_start_frame,
+            early_end_frame,
+            (f64) desc->sample_rate,
+            frequency_hz
+        );
+        late_magnitude = ComputeSpectrumMagnitude(
+            capture,
+            analysis_channel_index,
+            late_start_frame,
+            late_end_frame,
+            (f64) desc->sample_rate,
+            frequency_hz
+        );
+
+        decay_db = 20.0 * log10((late_magnitude + EPSILON) / (early_magnitude + EPSILON));
+        x = (f64) harmonic_index;
+        x_mean += x;
+        y_mean += decay_db;
+        used_count += 1;
+
+        if (harmonic_index <= 3)
+        {
+            low_sum += decay_db;
+            low_count += 1;
+        }
+        else
+        {
+            high_sum += decay_db;
+            high_count += 1;
+        }
+    }
+
+    if (low_count > 0)
+    {
+        *low_band_db = low_sum / (f64) low_count;
+    }
+    if (high_count > 0)
+    {
+        *high_band_db = high_sum / (f64) high_count;
+    }
+
+    if (used_count >= 2)
+    {
+        f64 denominator;
+
+        x_mean /= (f64) used_count;
+        y_mean /= (f64) used_count;
+        for (harmonic_index = 1; harmonic_index <= 8; harmonic_index += 1)
+        {
+            f64 frequency_hz;
+            f64 harmonic_multiplier;
+            f64 early_magnitude;
+            f64 late_magnitude;
+            f64 decay_db;
+            f64 x;
+            f64 dx;
+            f64 dy;
+
+            if (((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN) &&
+                 (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID)) ||
+                ((desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_RIGID) &&
+                 (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)))
+            {
+                harmonic_multiplier = (f64) (2 * (i32) harmonic_index - 1);
+            }
+            else
+            {
+                harmonic_multiplier = (f64) harmonic_index;
+            }
+
+            frequency_hz = fundamental_frequency_hz * harmonic_multiplier;
+            if (frequency_hz >= (0.5 * (f64) desc->sample_rate - 20.0))
+            {
+                continue;
+            }
+
+            early_magnitude = ComputeSpectrumMagnitude(
+                capture,
+                analysis_channel_index,
+                early_start_frame,
+                early_end_frame,
+                (f64) desc->sample_rate,
+                frequency_hz
+            );
+            late_magnitude = ComputeSpectrumMagnitude(
+                capture,
+                analysis_channel_index,
+                late_start_frame,
+                late_end_frame,
+                (f64) desc->sample_rate,
+                frequency_hz
+            );
+            decay_db = 20.0 * log10((late_magnitude + EPSILON) / (early_magnitude + EPSILON));
+            x = (f64) harmonic_index;
+            dx = x - x_mean;
+            dy = decay_db - y_mean;
+            xx_sum += dx * dx;
+            xy_sum += dx * dy;
+        }
+
+        denominator = xx_sum + EPSILON;
+        *slope_db_per_harmonic = xy_sum / denominator;
+    }
+}
+
 static f64 GetFundamentalFrequencyHz (const Fdtd1DDesc *desc)
 {
     ASSERT(desc != NULL);
@@ -1800,6 +1990,19 @@ static void AnalyzeSustainedBehavior (
         frequency_start_hz,
         frequency_end_hz,
         2.0
+    );
+
+    ComputeHarmonicDecayMetrics(
+        capture,
+        desc,
+        analysis_channel_index,
+        result->early_start_frame,
+        result->early_end_frame,
+        result->late_start_frame,
+        result->late_end_frame,
+        &result->harmonic_decay_low_band_db,
+        &result->harmonic_decay_high_band_db,
+        &result->harmonic_decay_slope_db_per_harmonic
     );
 }
 
@@ -2634,6 +2837,15 @@ int main (int argc, char **argv)
     );
     printf("  late_harmonic_ratio:    %.6f\n",
         summary.sustained.late_harmonic_energy_ratio
+    );
+    printf("  harmonic_decay_low_db:  %.3f\n",
+        summary.sustained.harmonic_decay_low_band_db
+    );
+    printf("  harmonic_decay_high_db: %.3f\n",
+        summary.sustained.harmonic_decay_high_band_db
+    );
+    printf("  harmonic_decay_slope:   %.3f dB/harmonic\n",
+        summary.sustained.harmonic_decay_slope_db_per_harmonic
     );
     printf("  late_spectral_flatness: %.6f\n",
         summary.sustained.late_spectral_flatness
