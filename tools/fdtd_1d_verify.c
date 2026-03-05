@@ -433,6 +433,8 @@ static void ConfigureSolver (
     desc->uniform_area_m2 = 0.01;
     desc->uniform_loss = 0.00005;
     desc->uniform_high_frequency_loss = 0.01;
+    desc->uniform_boundary_loss = 0.00008;
+    desc->uniform_boundary_high_frequency_loss = 0.015;
     desc->area_segment_count = 0;
     desc->area_segment_descs = NULL;
     switch (settings->preset)
@@ -2389,6 +2391,12 @@ int main (int argc, char **argv)
     );
     printf("  hf_loss:                %.6f\n",
         solver_desc.uniform_high_frequency_loss
+    );
+    printf("  boundary_loss:          %.6f\n",
+        solver_desc.uniform_boundary_loss
+    );
+    printf("  boundary_hf_loss:       %.6f\n",
+        solver_desc.uniform_boundary_high_frequency_loss
     );
     printf("  left_boundary:          %s\n",
         GetBoundaryTypeName(solver_desc.left_boundary.type)

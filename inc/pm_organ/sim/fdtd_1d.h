@@ -89,6 +89,8 @@ typedef struct Fdtd1DDesc
     f64 uniform_area_m2;
     f64 uniform_loss;
     f64 uniform_high_frequency_loss;
+    f64 uniform_boundary_loss;
+    f64 uniform_boundary_high_frequency_loss;
 
     u32 area_segment_count;
     const Fdtd1DAreaSegmentDesc *area_segment_descs;
@@ -129,6 +131,8 @@ typedef struct Fdtd1DState
     f32 *velocity_previous;
     f32 pressure_high_frequency_loss;
     f32 velocity_high_frequency_loss;
+    f32 boundary_loss;
+    f32 boundary_high_frequency_loss;
 
     f32 *pressure_update_coeff;
     f32 *velocity_update_coeff;

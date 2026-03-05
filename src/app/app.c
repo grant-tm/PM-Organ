@@ -254,6 +254,8 @@ static void BuildFdtdPresetDesc (
     render_source_desc->solver_desc.uniform_area_m2 = 0.01;
     render_source_desc->solver_desc.uniform_loss = 0.00005;
     render_source_desc->solver_desc.uniform_high_frequency_loss = 0.01;
+    render_source_desc->solver_desc.uniform_boundary_loss = 0.00008;
+    render_source_desc->solver_desc.uniform_boundary_high_frequency_loss = 0.015;
     render_source_desc->solver_desc.left_boundary.type = FDTD_1D_BOUNDARY_TYPE_OPEN;
     render_source_desc->solver_desc.left_boundary.reflection_coefficient = -1.0;
     render_source_desc->solver_desc.right_boundary.type = FDTD_1D_BOUNDARY_TYPE_RIGID;

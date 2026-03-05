@@ -871,11 +871,11 @@ static void UpdateVelocityField (Fdtd1DState *state)
             }
 
             state->velocity[0] = (incoming_pressure - outgoing_pressure) / characteristic_impedance;
-            state->velocity[0] *= (1.0f - state->velocity_loss[0]);
+            state->velocity[0] *= (1.0f - state->boundary_loss);
             state->velocity[0] = ApplyFrequencyDependentLoss(
                 state->velocity[0],
                 &state->velocity_previous[0],
-                state->velocity_high_frequency_loss
+                state->boundary_high_frequency_loss
             );
         } break;
     }
@@ -917,11 +917,11 @@ static void UpdateVelocityField (Fdtd1DState *state)
             state->velocity[state->velocity_cell_count - 1] =
                 (outgoing_pressure - incoming_pressure) / characteristic_impedance;
             state->velocity[state->velocity_cell_count - 1] *=
-                (1.0f - state->velocity_loss[state->velocity_cell_count - 1]);
+                (1.0f - state->boundary_loss);
             state->velocity[state->velocity_cell_count - 1] = ApplyFrequencyDependentLoss(
                 state->velocity[state->velocity_cell_count - 1],
                 &state->velocity_previous[state->velocity_cell_count - 1],
-                state->velocity_high_frequency_loss
+                state->boundary_high_frequency_loss
             );
         } break;
     }
@@ -1233,6 +1233,17 @@ bool Fdtd1D_ValidateDesc (const Fdtd1DDesc *desc)
         return false;
     }
 
+    if ((desc->uniform_boundary_loss < 0.0) || (desc->uniform_boundary_loss > 1.0))
+    {
+        return false;
+    }
+
+    if ((desc->uniform_boundary_high_frequency_loss < 0.0) ||
+        (desc->uniform_boundary_high_frequency_loss > 1.0))
+    {
+        return false;
+    }
+
     if (ValidateBoundary(&desc->left_boundary) == false)
     {
         return false;
@@ -1403,6 +1414,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     InitializeUniformField(state->velocity_loss, desc->velocity_cell_count, (f32) desc->uniform_loss);
     state->pressure_high_frequency_loss = (f32) desc->uniform_high_frequency_loss;
     state->velocity_high_frequency_loss = (f32) desc->uniform_high_frequency_loss;
+    state->boundary_loss = (f32) desc->uniform_boundary_loss;
+    state->boundary_high_frequency_loss = (f32) desc->uniform_boundary_high_frequency_loss;
     InitializeUniformField(state->velocity_update_coeff, desc->velocity_cell_count, (f32) velocity_update_coeff);
     InitializePressureUpdateCoefficients(state);
 
