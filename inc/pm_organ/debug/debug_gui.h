@@ -23,6 +23,10 @@ typedef struct DebugGuiFrameDesc
     f32 speech_attack_seconds;
     f32 speech_chiff_amount;
     f32 speech_chiff_decay_seconds;
+    f32 listener_distance_m;
+    f32 listener_mouth_pressure_mix;
+    f32 listener_crossfeed;
+    f32 listener_lowpass_cutoff_hz;
     f32 effective_drive_requested;
     f32 effective_drive_applied;
     f32 effective_drive_saturation_ratio;
@@ -57,6 +61,10 @@ typedef struct DebugGuiFrameActions
     bool request_set_speech_attack_seconds;
     bool request_set_speech_chiff_amount;
     bool request_set_speech_chiff_decay_seconds;
+    bool request_set_listener_distance;
+    bool request_set_listener_mouth_pressure_mix;
+    bool request_set_listener_crossfeed;
+    bool request_set_listener_lowpass_cutoff;
     bool request_set_master_gain;
     bool request_set_output_muted;
     u32 selected_excitation_mode;
@@ -68,6 +76,10 @@ typedef struct DebugGuiFrameActions
     f32 speech_attack_seconds;
     f32 speech_chiff_amount;
     f32 speech_chiff_decay_seconds;
+    f32 listener_distance_m;
+    f32 listener_mouth_pressure_mix;
+    f32 listener_crossfeed;
+    f32 listener_lowpass_cutoff_hz;
     f32 master_gain;
     bool output_is_muted;
 } DebugGuiFrameActions;

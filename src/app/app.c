@@ -69,6 +69,10 @@ typedef struct AppState
     f32 speech_attack_seconds;
     f32 speech_chiff_amount;
     f32 speech_chiff_decay_seconds;
+    f32 listener_distance_m;
+    f32 listener_mouth_pressure_mix;
+    f32 listener_crossfeed;
+    f32 listener_lowpass_cutoff_hz;
     f32 master_gain;
     bool output_is_muted;
     bool fdtd_source_is_active;
@@ -288,6 +292,10 @@ static void BuildFdtdPresetDesc (
     render_source_desc->speech_attack_seconds = 0.06;
     render_source_desc->speech_chiff_amount = 0.35;
     render_source_desc->speech_chiff_decay_seconds = 0.05;
+    render_source_desc->listener_distance_m = 4.0;
+    render_source_desc->listener_mouth_pressure_mix = 0.22;
+    render_source_desc->listener_crossfeed = 0.10;
+    render_source_desc->listener_lowpass_cutoff_hz = 3200.0;
     render_source_desc->output_extraction_mode = FDTD_1D_OUTPUT_EXTRACTION_MODE_MOUTH_RADIATION;
     render_source_desc->startup_impulse_is_enabled = true;
     render_source_desc->startup_impulse_target_index = 0;
@@ -412,6 +420,33 @@ static void ApplyExcitationSettingsToSources (AppState *app)
         Fdtd1DRenderSource_SetSpeechChiffDecaySeconds(
             &app->fdtd_render_sources[preset_type],
             (f64) app->speech_chiff_decay_seconds
+        );
+    }
+}
+
+static void ApplyListenerSettingsToSources (AppState *app)
+{
+    FdtdPresetType preset_type;
+
+    ASSERT(app != NULL);
+
+    for (preset_type = 0; preset_type < FDTD_PRESET_TYPE_COUNT; preset_type = (FdtdPresetType) (preset_type + 1))
+    {
+        Fdtd1DRenderSource_SetListenerDistance(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->listener_distance_m
+        );
+        Fdtd1DRenderSource_SetListenerMouthPressureMix(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->listener_mouth_pressure_mix
+        );
+        Fdtd1DRenderSource_SetListenerCrossfeed(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->listener_crossfeed
+        );
+        Fdtd1DRenderSource_SetListenerLowpassCutoff(
+            &app->fdtd_render_sources[preset_type],
+            (f64) app->listener_lowpass_cutoff_hz
         );
     }
 }
@@ -559,6 +594,66 @@ static void SetSpeechChiffDecaySeconds (AppState *app, f32 speech_chiff_decay_se
     app->speech_chiff_decay_seconds = speech_chiff_decay_seconds;
     ApplyExcitationSettingsToSources(app);
     RestartSpeechForAllSources(app);
+}
+
+static void SetListenerDistance (AppState *app, f32 listener_distance_m)
+{
+    ASSERT(app != NULL);
+
+    if (listener_distance_m < 0.0f)
+    {
+        listener_distance_m = 0.0f;
+    }
+
+    app->listener_distance_m = listener_distance_m;
+    ApplyListenerSettingsToSources(app);
+}
+
+static void SetListenerMouthPressureMix (AppState *app, f32 listener_mouth_pressure_mix)
+{
+    ASSERT(app != NULL);
+
+    if (listener_mouth_pressure_mix < 0.0f)
+    {
+        listener_mouth_pressure_mix = 0.0f;
+    }
+    if (listener_mouth_pressure_mix > 1.0f)
+    {
+        listener_mouth_pressure_mix = 1.0f;
+    }
+
+    app->listener_mouth_pressure_mix = listener_mouth_pressure_mix;
+    ApplyListenerSettingsToSources(app);
+}
+
+static void SetListenerCrossfeed (AppState *app, f32 listener_crossfeed)
+{
+    ASSERT(app != NULL);
+
+    if (listener_crossfeed < 0.0f)
+    {
+        listener_crossfeed = 0.0f;
+    }
+    if (listener_crossfeed > 1.0f)
+    {
+        listener_crossfeed = 1.0f;
+    }
+
+    app->listener_crossfeed = listener_crossfeed;
+    ApplyListenerSettingsToSources(app);
+}
+
+static void SetListenerLowpassCutoff (AppState *app, f32 listener_lowpass_cutoff_hz)
+{
+    ASSERT(app != NULL);
+
+    if (listener_lowpass_cutoff_hz < 0.0f)
+    {
+        listener_lowpass_cutoff_hz = 0.0f;
+    }
+
+    app->listener_lowpass_cutoff_hz = listener_lowpass_cutoff_hz;
+    ApplyListenerSettingsToSources(app);
 }
 
 static void UpdateDebugInput (AppState *app)
@@ -739,12 +834,17 @@ int App_Run (void)
     app->speech_attack_seconds = 0.06f;
     app->speech_chiff_amount = 0.35f;
     app->speech_chiff_decay_seconds = 0.05f;
+    app->listener_distance_m = 4.0f;
+    app->listener_mouth_pressure_mix = 0.22f;
+    app->listener_crossfeed = 0.10f;
+    app->listener_lowpass_cutoff_hz = 3200.0f;
     app->master_gain = 0.35f;
     app->output_is_muted = false;
     AudioEngine_SetMasterGain(&app->audio_engine, app->master_gain);
     AudioEngine_SetOutputMuted(&app->audio_engine, app->output_is_muted);
     ApplyExcitationSettingsToSources(app);
     ApplyOutputExtractionModeToSources(app);
+    ApplyListenerSettingsToSources(app);
     SetActiveRenderSource(app, true);
 
     audio_desc.sample_rate = 48000;
@@ -810,6 +910,10 @@ int App_Run (void)
         gui_frame_desc.speech_attack_seconds = app->speech_attack_seconds;
         gui_frame_desc.speech_chiff_amount = app->speech_chiff_amount;
         gui_frame_desc.speech_chiff_decay_seconds = app->speech_chiff_decay_seconds;
+        gui_frame_desc.listener_distance_m = app->listener_distance_m;
+        gui_frame_desc.listener_mouth_pressure_mix = app->listener_mouth_pressure_mix;
+        gui_frame_desc.listener_crossfeed = app->listener_crossfeed;
+        gui_frame_desc.listener_lowpass_cutoff_hz = app->listener_lowpass_cutoff_hz;
         gui_frame_desc.effective_drive_requested = (f32) active_render_source->last_requested_drive;
         gui_frame_desc.effective_drive_applied = (f32) active_render_source->last_applied_drive;
         gui_frame_desc.effective_drive_saturation_ratio = (f32) active_render_source->last_drive_saturation_ratio;
@@ -884,6 +988,26 @@ int App_Run (void)
         if (gui_actions.request_set_speech_chiff_decay_seconds)
         {
             SetSpeechChiffDecaySeconds(app, gui_actions.speech_chiff_decay_seconds);
+        }
+
+        if (gui_actions.request_set_listener_distance)
+        {
+            SetListenerDistance(app, gui_actions.listener_distance_m);
+        }
+
+        if (gui_actions.request_set_listener_mouth_pressure_mix)
+        {
+            SetListenerMouthPressureMix(app, gui_actions.listener_mouth_pressure_mix);
+        }
+
+        if (gui_actions.request_set_listener_crossfeed)
+        {
+            SetListenerCrossfeed(app, gui_actions.listener_crossfeed);
+        }
+
+        if (gui_actions.request_set_listener_lowpass_cutoff)
+        {
+            SetListenerLowpassCutoff(app, gui_actions.listener_lowpass_cutoff_hz);
         }
 
         if (gui_actions.request_set_master_gain)

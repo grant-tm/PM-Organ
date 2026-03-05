@@ -300,11 +300,9 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
     memset(frame_actions, 0, sizeof(*frame_actions));
 
     ImGui::SetNextWindowPos(ImVec2(12.0f, 12.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
-
-    if (ImGui::Begin("PM-Organ Controls"))
+    ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("PM-Organ: Source"))
     {
-        ImGui::Text("Source");
         if (ImGui::RadioButton("FDTD", frame_desc->fdtd_source_is_active))
         {
             frame_actions->request_use_fdtd_source = true;
@@ -322,7 +320,25 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
         }
 
         ImGui::Separator();
-        ImGui::Text("Excitation");
+        ImGui::Text("Source Coupling");
+        for (preset_index = 0; preset_index < frame_desc->source_coupling_mode_count; preset_index += 1)
+        {
+            bool is_selected;
+
+            is_selected = (preset_index == frame_desc->active_source_coupling_mode);
+            if (ImGui::Selectable(frame_desc->source_coupling_mode_names[preset_index], is_selected))
+            {
+                frame_actions->request_select_source_coupling_mode = true;
+                frame_actions->selected_source_coupling_mode = (u32) preset_index;
+            }
+        }
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(344.0f, 12.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("PM-Organ: Excitation"))
+    {
         for (preset_index = 0; preset_index < frame_desc->excitation_mode_count; preset_index += 1)
         {
             bool is_selected;
@@ -365,12 +381,80 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
             frame_actions->request_set_speech_chiff_decay_seconds = true;
         }
 
+        ImGui::Separator();
         ImGui::Text("Effective Drive Requested: %.6f", frame_desc->effective_drive_requested);
         ImGui::Text("Effective Drive Applied:   %.6f", frame_desc->effective_drive_applied);
         ImGui::Text("Drive Saturation Ratio:    %.3f", frame_desc->effective_drive_saturation_ratio);
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(12.0f, 300.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("PM-Organ: Geometry"))
+    {
+        for (preset_index = 0; preset_index < frame_desc->preset_count; preset_index += 1)
+        {
+            bool is_selected;
+
+            is_selected = (preset_index == frame_desc->active_preset_index);
+            if (ImGui::Selectable(frame_desc->preset_names[preset_index], is_selected))
+            {
+                frame_actions->request_select_preset = true;
+                frame_actions->selected_preset_index = (u32) preset_index;
+            }
+        }
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(344.0f, 330.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("PM-Organ: Output"))
+    {
+        ImGui::Text("Output Extraction");
+        for (preset_index = 0; preset_index < frame_desc->output_extraction_mode_count; preset_index += 1)
+        {
+            bool is_selected;
+
+            is_selected = (preset_index == frame_desc->active_output_extraction_mode);
+            if (ImGui::Selectable(frame_desc->output_extraction_mode_names[preset_index], is_selected))
+            {
+                frame_actions->request_select_output_extraction_mode = true;
+                frame_actions->selected_output_extraction_mode = (u32) preset_index;
+            }
+        }
 
         ImGui::Separator();
-        ImGui::Text("Output");
+        ImGui::Text("Listener Model");
+        frame_actions->listener_distance_m = frame_desc->listener_distance_m;
+        if (ImGui::SliderFloat("Listener Distance (m)", &frame_actions->listener_distance_m, 0.0f, 20.0f, "%.2f"))
+        {
+            frame_actions->request_set_listener_distance = true;
+        }
+
+        frame_actions->listener_mouth_pressure_mix = frame_desc->listener_mouth_pressure_mix;
+        if (ImGui::SliderFloat("Listener Mouth Mix", &frame_actions->listener_mouth_pressure_mix, 0.0f, 1.0f, "%.3f"))
+        {
+            frame_actions->request_set_listener_mouth_pressure_mix = true;
+        }
+
+        frame_actions->listener_crossfeed = frame_desc->listener_crossfeed;
+        if (ImGui::SliderFloat("Listener Crossfeed", &frame_actions->listener_crossfeed, 0.0f, 1.0f, "%.3f"))
+        {
+            frame_actions->request_set_listener_crossfeed = true;
+        }
+
+        frame_actions->listener_lowpass_cutoff_hz = frame_desc->listener_lowpass_cutoff_hz;
+        if (ImGui::SliderFloat("Listener LPF (Hz)", &frame_actions->listener_lowpass_cutoff_hz, 200.0f, 12000.0f, "%.0f"))
+        {
+            frame_actions->request_set_listener_lowpass_cutoff = true;
+        }
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(718.0f, 12.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("PM-Organ: Global"))
+    {
         frame_actions->master_gain = frame_desc->master_gain;
         if (ImGui::SliderFloat("Master Gain", &frame_actions->master_gain, 0.0f, 1.0f, "%.3f"))
         {
@@ -389,54 +473,11 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
         }
 
         ImGui::Separator();
-        ImGui::Text("Source Coupling");
-        for (preset_index = 0; preset_index < frame_desc->source_coupling_mode_count; preset_index += 1)
-        {
-            bool is_selected;
-
-            is_selected = (preset_index == frame_desc->active_source_coupling_mode);
-            if (ImGui::Selectable(frame_desc->source_coupling_mode_names[preset_index], is_selected))
-            {
-                frame_actions->request_select_source_coupling_mode = true;
-                frame_actions->selected_source_coupling_mode = (u32) preset_index;
-            }
-        }
-
-        ImGui::Separator();
-        ImGui::Text("Output Extraction");
-        for (preset_index = 0; preset_index < frame_desc->output_extraction_mode_count; preset_index += 1)
-        {
-            bool is_selected;
-
-            is_selected = (preset_index == frame_desc->active_output_extraction_mode);
-            if (ImGui::Selectable(frame_desc->output_extraction_mode_names[preset_index], is_selected))
-            {
-                frame_actions->request_select_output_extraction_mode = true;
-                frame_actions->selected_output_extraction_mode = (u32) preset_index;
-            }
-        }
-
-        ImGui::Separator();
-        ImGui::Text("Geometry Presets");
-        for (preset_index = 0; preset_index < frame_desc->preset_count; preset_index += 1)
-        {
-            bool is_selected;
-
-            is_selected = (preset_index == frame_desc->active_preset_index);
-            if (ImGui::Selectable(frame_desc->preset_names[preset_index], is_selected))
-            {
-                frame_actions->request_select_preset = true;
-                frame_actions->selected_preset_index = (u32) preset_index;
-            }
-        }
-
-        ImGui::Separator();
         ImGui::Text("Frame: %.3f ms (%.1f FPS)",
             frame_desc->delta_seconds * 1000.0,
             (frame_desc->delta_seconds > 0.0) ? (1.0 / frame_desc->delta_seconds) : 0.0
         );
         ImGui::Text("Hotkeys: Space retrigger, T source, G preset");
-
     }
     ImGui::End();
 }

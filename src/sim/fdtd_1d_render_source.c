@@ -28,11 +28,11 @@ static const f64 MAX_SAFE_STARTUP_CHIFF_NOISE = 0.0025;
 static const f64 DEFAULT_SPEECH_ATTACK_SECONDS = 0.06;
 static const f64 DEFAULT_SPEECH_CHIFF_AMOUNT = 0.35;
 static const f64 DEFAULT_SPEECH_CHIFF_DECAY_SECONDS = 0.05;
-static const f32 LISTENER_MODEL_DISTANCE_M = 4.0f;
 static const f32 LISTENER_MODEL_DISTANCE_ATTENUATION_SCALE = 0.35f;
-static const f32 LISTENER_MODEL_MOUTH_PRESSURE_MIX = 0.22f;
-static const f32 LISTENER_MODEL_CROSSFEED = 0.10f;
-static const f32 LISTENER_MODEL_CUTOFF_HZ = 3200.0f;
+static const f64 DEFAULT_LISTENER_DISTANCE_M = 4.0;
+static const f64 DEFAULT_LISTENER_MOUTH_PRESSURE_MIX = 0.22;
+static const f64 DEFAULT_LISTENER_CROSSFEED = 0.10;
+static const f64 DEFAULT_LISTENER_LOWPASS_CUTOFF_HZ = 3200.0;
 static const f32 LISTENER_MODEL_OUTPUT_CLAMP = 0.35f;
 
 static f64 ClampF64 (f64 value, f64 min_value, f64 max_value)
@@ -282,6 +282,14 @@ bool Fdtd1DRenderSource_Initialize (
     source->speech_gate = 0.0;
     source->speech_onset_seconds = 0.0;
     source->speech_is_active = false;
+    source->listener_distance_m =
+        (desc->listener_distance_m > 0.0) ? desc->listener_distance_m : DEFAULT_LISTENER_DISTANCE_M;
+    source->listener_mouth_pressure_mix = ClampUnitF64(desc->listener_mouth_pressure_mix);
+    source->listener_crossfeed = ClampUnitF64(desc->listener_crossfeed);
+    source->listener_lowpass_cutoff_hz =
+        (desc->listener_lowpass_cutoff_hz > 0.0) ?
+            desc->listener_lowpass_cutoff_hz :
+            DEFAULT_LISTENER_LOWPASS_CUTOFF_HZ;
     source->last_requested_drive = 0.0;
     source->last_applied_drive = 0.0;
     source->last_drive_saturation_ratio = 0.0;
@@ -374,6 +382,47 @@ void Fdtd1DRenderSource_SetSpeechChiffDecaySeconds (
     ASSERT(source != NULL);
 
     source->speech_chiff_decay_seconds = ClampNonNegativeF64(speech_chiff_decay_seconds);
+}
+
+void Fdtd1DRenderSource_SetListenerDistance (Fdtd1DRenderSource *source, f64 listener_distance_m)
+{
+    ASSERT(source != NULL);
+
+    if (listener_distance_m < 0.0)
+    {
+        listener_distance_m = 0.0;
+    }
+
+    source->listener_distance_m = listener_distance_m;
+}
+
+void Fdtd1DRenderSource_SetListenerMouthPressureMix (Fdtd1DRenderSource *source, f64 listener_mouth_pressure_mix)
+{
+    ASSERT(source != NULL);
+
+    source->listener_mouth_pressure_mix = ClampUnitF64(listener_mouth_pressure_mix);
+}
+
+void Fdtd1DRenderSource_SetListenerCrossfeed (Fdtd1DRenderSource *source, f64 listener_crossfeed)
+{
+    ASSERT(source != NULL);
+
+    source->listener_crossfeed = ClampUnitF64(listener_crossfeed);
+}
+
+void Fdtd1DRenderSource_SetListenerLowpassCutoff (
+    Fdtd1DRenderSource *source,
+    f64 listener_lowpass_cutoff_hz
+)
+{
+    ASSERT(source != NULL);
+
+    if (listener_lowpass_cutoff_hz < 0.0)
+    {
+        listener_lowpass_cutoff_hz = 0.0;
+    }
+
+    source->listener_lowpass_cutoff_hz = listener_lowpass_cutoff_hz;
 }
 
 void Fdtd1DRenderSource_RestartSpeech (Fdtd1DRenderSource *source)
@@ -748,8 +797,8 @@ void Fdtd1DRenderSource_Render (
             ASSERT(simulation->config.probe_count >= 8);
 
             distance_attenuation =
-                1.0f / (1.0f + (LISTENER_MODEL_DISTANCE_ATTENUATION_SCALE * LISTENER_MODEL_DISTANCE_M));
-            lowpass_alpha = ComputeOnePoleLowpassAlpha(LISTENER_MODEL_CUTOFF_HZ, sample_rate);
+                1.0f / (1.0f + (LISTENER_MODEL_DISTANCE_ATTENUATION_SCALE * (f32) source->listener_distance_m));
+            lowpass_alpha = ComputeOnePoleLowpassAlpha((f32) source->listener_lowpass_cutoff_hz, sample_rate);
             left_is_open = (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN);
             right_is_open = (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN);
 
@@ -780,13 +829,13 @@ void Fdtd1DRenderSource_Render (
                 right_mouth_pressure =
                     simulation->probe_buffer[probe_offset + RENDER_SOURCE_PROBE_INDEX_RIGHT_MOUTH_PRESSURE];
 
-                left_raw = left_emission + (LISTENER_MODEL_MOUTH_PRESSURE_MIX * left_mouth_pressure);
-                right_raw = right_emission + (LISTENER_MODEL_MOUTH_PRESSURE_MIX * right_mouth_pressure);
+                left_raw = left_emission + ((f32) source->listener_mouth_pressure_mix * left_mouth_pressure);
+                right_raw = right_emission + ((f32) source->listener_mouth_pressure_mix * right_mouth_pressure);
 
                 if (left_is_open && right_is_open)
                 {
-                    left_raw += LISTENER_MODEL_CROSSFEED * right_emission;
-                    right_raw += LISTENER_MODEL_CROSSFEED * left_emission;
+                    left_raw += (f32) source->listener_crossfeed * right_emission;
+                    right_raw += (f32) source->listener_crossfeed * left_emission;
                 }
                 else
                 {

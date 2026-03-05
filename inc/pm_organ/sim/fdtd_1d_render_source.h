@@ -39,6 +39,10 @@ typedef struct Fdtd1DRenderSourceDesc
     f64 speech_attack_seconds;
     f64 speech_chiff_amount;
     f64 speech_chiff_decay_seconds;
+    f64 listener_distance_m;
+    f64 listener_mouth_pressure_mix;
+    f64 listener_crossfeed;
+    f64 listener_lowpass_cutoff_hz;
     Fdtd1DOutputExtractionMode output_extraction_mode;
     bool startup_impulse_is_enabled;
     u32 startup_impulse_target_index;
@@ -57,6 +61,10 @@ typedef struct Fdtd1DRenderSource
     f64 speech_attack_seconds;
     f64 speech_chiff_amount;
     f64 speech_chiff_decay_seconds;
+    f64 listener_distance_m;
+    f64 listener_mouth_pressure_mix;
+    f64 listener_crossfeed;
+    f64 listener_lowpass_cutoff_hz;
     f64 speech_gate;
     f64 speech_onset_seconds;
     bool speech_is_active;
@@ -97,6 +105,13 @@ void Fdtd1DRenderSource_SetSpeechChiffAmount (Fdtd1DRenderSource *source, f64 sp
 void Fdtd1DRenderSource_SetSpeechChiffDecaySeconds (
     Fdtd1DRenderSource *source,
     f64 speech_chiff_decay_seconds
+);
+void Fdtd1DRenderSource_SetListenerDistance (Fdtd1DRenderSource *source, f64 listener_distance_m);
+void Fdtd1DRenderSource_SetListenerMouthPressureMix (Fdtd1DRenderSource *source, f64 listener_mouth_pressure_mix);
+void Fdtd1DRenderSource_SetListenerCrossfeed (Fdtd1DRenderSource *source, f64 listener_crossfeed);
+void Fdtd1DRenderSource_SetListenerLowpassCutoff (
+    Fdtd1DRenderSource *source,
+    f64 listener_lowpass_cutoff_hz
 );
 void Fdtd1DRenderSource_RestartSpeech (Fdtd1DRenderSource *source);
 void Fdtd1DRenderSource_Render (
