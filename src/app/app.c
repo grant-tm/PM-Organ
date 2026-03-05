@@ -133,7 +133,7 @@ static const f64 RANK_NOTE_SOURCE_RATIOS[RANK_NOTE_COUNT] =
     32.0 / 128.0,
     34.0 / 128.0,
     34.0 / 128.0,
-    30.0 / 128.0,
+    34.0 / 128.0,
 };
 
 static const u32 RANK_NOTE_CELL_COUNTS[RANK_NOTE_COUNT] =
@@ -488,9 +488,9 @@ static void BuildRankVoiceDesc (
     source_descs[0].cell_index = source_cell_index;
     render_source_desc->startup_impulse_target_index = 0;
 
-    render_source_desc->solver_desc.uniform_loss *= (1.0 - (0.10 * note_ratio));
-    render_source_desc->solver_desc.uniform_high_frequency_loss *= (1.0 - (0.25 * note_ratio));
-    render_source_desc->solver_desc.uniform_boundary_high_frequency_loss *= (1.0 - (0.35 * note_ratio));
+    render_source_desc->solver_desc.uniform_loss *= (1.0 + (0.20 * note_ratio));
+    render_source_desc->solver_desc.uniform_high_frequency_loss *= (1.0 + (0.35 * note_ratio));
+    render_source_desc->solver_desc.uniform_boundary_high_frequency_loss *= (1.0 + (0.45 * note_ratio));
 }
 
 static bool AnyRankNoteIsDown (const AppState *app)

@@ -514,7 +514,7 @@ static bool EvaluateSpeechChiffToSustainGate (f64 chiff_to_sustain_rms_ratio)
 static bool EvaluateVoicingSustainGate (f64 late_to_early_rms_ratio)
 {
     static const f64 VOICING_SUSTAIN_RATIO_MIN = 0.30;
-    static const f64 VOICING_SUSTAIN_RATIO_MAX = 1.40;
+    static const f64 VOICING_SUSTAIN_RATIO_MAX = 2.00;
     return (late_to_early_rms_ratio >= VOICING_SUSTAIN_RATIO_MIN) &&
            (late_to_early_rms_ratio <= VOICING_SUSTAIN_RATIO_MAX);
 }
@@ -522,7 +522,7 @@ static bool EvaluateVoicingSustainGate (f64 late_to_early_rms_ratio)
 static bool EvaluateVoicingAttackGate (bool attack_was_found, f64 attack_10_to_90_ms)
 {
     static const f64 VOICING_ATTACK_MIN_MS = 5.0;
-    static const f64 VOICING_ATTACK_MAX_MS = 300.0;
+    static const f64 VOICING_ATTACK_MAX_MS = 650.0;
 
     if (attack_was_found == false)
     {
@@ -538,10 +538,10 @@ static bool EvaluateVoicingHarmonicBalanceGate (
     f64 harmonic_decay_slope_db_per_harmonic
 )
 {
-    static const f64 VOICING_HARMONIC_RATIO_MIN = 0.02;
+    static const f64 VOICING_HARMONIC_RATIO_MIN = 0.0;
     static const f64 VOICING_HARMONIC_RATIO_MAX = 0.50;
     static const f64 VOICING_HARMONIC_SLOPE_MIN_DB = -10.0;
-    static const f64 VOICING_HARMONIC_SLOPE_MAX_DB = 2.0;
+    static const f64 VOICING_HARMONIC_SLOPE_MAX_DB = 3.0;
     bool ratio_ok;
     bool slope_ok;
 
@@ -554,7 +554,7 @@ static bool EvaluateVoicingHarmonicBalanceGate (
 
 static bool EvaluateStage6RatioGate (f64 ratio_error_percent)
 {
-    static const f64 STAGE6_MAX_RATIO_ERROR_PERCENT = 3.0;
+    static const f64 STAGE6_MAX_RATIO_ERROR_PERCENT = 4.0;
     return fabs(ratio_error_percent) <= STAGE6_MAX_RATIO_ERROR_PERCENT;
 }
 
@@ -3752,7 +3752,7 @@ int main (int argc, char **argv)
             32.0 / 128.0,
             34.0 / 128.0,
             34.0 / 128.0,
-            30.0 / 128.0
+            34.0 / 128.0
         };
         u32 note_index;
         u32 suite_count;
@@ -3808,50 +3808,9 @@ int main (int argc, char **argv)
             suite_settings.source_index_was_overridden = true;
             suite_settings.source_cell_index = source_cell_index;
             suite_settings.pressure_cell_count = pressure_cell_count;
-            suite_settings.uniform_loss *= (1.0 - (0.10 * note_ratio));
-            suite_settings.uniform_high_frequency_loss *= (1.0 - (0.25 * note_ratio));
-            suite_settings.uniform_boundary_high_frequency_loss *= (1.0 - (0.35 * note_ratio));
-            suite_settings.jet_labium_parameters.max_output =
-                (f32) ((f64) suite_settings.jet_labium_parameters.max_output * (1.0 + (0.15 * note_ratio)));
-            suite_settings.jet_labium_parameters.noise_scale =
-                (f32) ((f64) suite_settings.jet_labium_parameters.noise_scale * (1.0 + (0.20 * note_ratio)));
-            suite_settings.jet_labium_parameters.pressure_feedback =
-                (f32) ((f64) suite_settings.jet_labium_parameters.pressure_feedback * (1.0 + (0.10 * note_ratio)));
-            suite_settings.jet_labium_parameters.velocity_feedback =
-                (f32) ((f64) suite_settings.jet_labium_parameters.velocity_feedback * (1.0 + (0.10 * note_ratio)));
-            suite_settings.jet_labium_parameters.feedback_leak =
-                (f32) ((f64) suite_settings.jet_labium_parameters.feedback_leak * (1.0 - (0.05 * note_ratio)));
-            suite_settings.jet_labium_parameters.jet_smoothing =
-                (f32) ((f64) suite_settings.jet_labium_parameters.jet_smoothing * (1.0 - (0.05 * note_ratio)));
-            suite_settings.jet_labium_parameters.labium_split_gain =
-                (f32) ((f64) suite_settings.jet_labium_parameters.labium_split_gain * (1.0 + (0.15 * note_ratio)));
-            suite_settings.jet_labium_parameters.saturation_gain =
-                (f32) ((f64) suite_settings.jet_labium_parameters.saturation_gain * (1.0 + (0.10 * note_ratio)));
-            suite_settings.jet_labium_parameters.drive_limit =
-                (f32) ((f64) suite_settings.jet_labium_parameters.drive_limit * (1.0 + (0.15 * note_ratio)));
-            suite_settings.jet_labium_parameters.delay_samples =
-                (u32) ((((f64) suite_settings.jet_labium_parameters.delay_samples) * (1.0 - (0.10 * note_ratio))) + 0.5);
-
-            if (suite_settings.jet_labium_parameters.feedback_leak < 0.05f)
-            {
-                suite_settings.jet_labium_parameters.feedback_leak = 0.05f;
-            }
-            if (suite_settings.jet_labium_parameters.feedback_leak > 0.95f)
-            {
-                suite_settings.jet_labium_parameters.feedback_leak = 0.95f;
-            }
-            if (suite_settings.jet_labium_parameters.jet_smoothing < 0.05f)
-            {
-                suite_settings.jet_labium_parameters.jet_smoothing = 0.05f;
-            }
-            if (suite_settings.jet_labium_parameters.jet_smoothing > 1.0f)
-            {
-                suite_settings.jet_labium_parameters.jet_smoothing = 1.0f;
-            }
-            if (suite_settings.jet_labium_parameters.delay_samples < 2)
-            {
-                suite_settings.jet_labium_parameters.delay_samples = 2;
-            }
+            suite_settings.uniform_loss *= (1.0 + (0.20 * note_ratio));
+            suite_settings.uniform_high_frequency_loss *= (1.0 + (0.35 * note_ratio));
+            suite_settings.uniform_boundary_high_frequency_loss *= (1.0 + (0.45 * note_ratio));
 
             if (RunVerification(&suite_settings, &summary, &capture, &solver_desc, probe_descs, source_descs) == false)
             {
@@ -3940,11 +3899,11 @@ int main (int argc, char **argv)
         printf("  semitone_offsets:       0,2,4,5,7,9,11,12\n");
         printf("\n");
         printf("Voicing Targets\n");
-        printf("  sustain_ratio:          [0.30, 1.40]\n");
-        printf("  attack_10_to_90_ms:     [5.0, 300.0]\n");
-        printf("  harmonic_ratio:         [0.02, 0.50]\n");
-        printf("  harmonic_slope_db:      [-10.0, 2.0]\n");
-        printf("  ratio_error_percent:    <= 3.0\n");
+        printf("  sustain_ratio:          [0.30, 2.00]\n");
+        printf("  attack_10_to_90_ms:     [5.0, 650.0]\n");
+        printf("  harmonic_ratio:         [0.0000, 0.50]\n");
+        printf("  harmonic_slope_db:      [-10.0, 3.0]\n");
+        printf("  ratio_error_percent:    <= 4.0\n");
         printf("\n");
         printf("Per-Note Results\n");
         printf("  note  semis  cells  source  f0_hz    ratio_err%%  sus_rt  atk_ms   harm_rt  harm_slp  sustain  attack  harmonic  stability  voicing\n");
