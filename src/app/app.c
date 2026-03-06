@@ -688,8 +688,8 @@ static void ProcessNoteEvents (AppState *app)
 
 static void UpdateRankWindchestCoupling (AppState *app, f64 block_seconds)
 {
-    static const f64 RANK_WINDCHEST_RECOVERY_HZ = 2.2;
-    static const f64 RANK_WINDCHEST_SAG_COEFFICIENT = 0.65;
+    static const f64 RANK_WINDCHEST_RECOVERY_HZ = 2.6;
+    static const f64 RANK_WINDCHEST_SAG_COEFFICIENT = 0.48;
     f64 airflow_demand;
     f64 pressure_delta;
     f64 target_pressure;
@@ -1534,7 +1534,7 @@ int App_Run (void)
     app->listener_mouth_pressure_mix = 0.18f;
     app->listener_crossfeed = 0.12f;
     app->listener_lowpass_cutoff_hz = 2800.0f;
-    app->master_gain = 0.35f;
+    app->master_gain = 0.50f;
     app->output_is_muted = false;
     AudioEngine_SetMasterGain(&app->audio_engine, app->master_gain);
     AudioEngine_SetOutputMuted(&app->audio_engine, app->output_is_muted);
