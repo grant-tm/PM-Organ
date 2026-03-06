@@ -568,7 +568,12 @@ static void ApplyRankJetCompensation (
 )
 {
     ASSERT(parameters != NULL);
-    (void) semitone_offset;
+
+    if (semitone_offset == 5)
+    {
+        parameters->feedback_leak *= 0.90f;
+        parameters->pressure_feedback *= 1.08f;
+    }
 }
 
 static void AnalyzeOrganBandRatios (
@@ -1378,6 +1383,8 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->jet_labium_parameters.feedback_leak = 0.35f;
     settings->jet_labium_parameters.jet_smoothing = 0.30f;
     settings->jet_labium_parameters.labium_split_gain = 1.9f;
+    settings->jet_labium_parameters.labium_offset = 0.0f;
+    settings->jet_labium_parameters.flow_nonlinearity = 1.0f;
     settings->jet_labium_parameters.saturation_gain = 12.0f;
     settings->jet_labium_parameters.drive_limit = 0.0022f;
     settings->jet_labium_parameters.delay_samples = 9;
@@ -1680,6 +1687,18 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
         if (TryParseDoubleValue(argument, "jet_labium_split_gain=", &parsed_f64))
         {
             settings->jet_labium_parameters.labium_split_gain = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_labium_offset=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.labium_offset = (f32) parsed_f64;
+            continue;
+        }
+
+        if (TryParseDoubleValue(argument, "jet_flow_nonlinearity=", &parsed_f64))
+        {
+            settings->jet_labium_parameters.flow_nonlinearity = (f32) parsed_f64;
             continue;
         }
 
@@ -4273,7 +4292,7 @@ int main (int argc, char **argv)
             32.0 / 128.0,
             33.0 / 128.0,
             34.0 / 128.0,
-            35.0 / 128.0,
+            39.0 / 128.0,
             36.0 / 128.0,
             37.0 / 128.0
         };
@@ -4484,7 +4503,7 @@ int main (int argc, char **argv)
             32.0 / 128.0,
             33.0 / 128.0,
             34.0 / 128.0,
-            35.0 / 128.0,
+            39.0 / 128.0,
             36.0 / 128.0,
             37.0 / 128.0
         };

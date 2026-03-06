@@ -68,6 +68,8 @@ typedef struct Fdtd1DJetLabiumParameters
     f32 feedback_leak;
     f32 jet_smoothing;
     f32 labium_split_gain;
+    f32 labium_offset;
+    f32 flow_nonlinearity;
     f32 saturation_gain;
     f32 drive_limit;
     u32 delay_samples;

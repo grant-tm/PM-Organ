@@ -140,7 +140,7 @@ static const f64 RANK_NOTE_SOURCE_RATIOS[RANK_NOTE_COUNT] =
     32.0 / 128.0,
     33.0 / 128.0,
     34.0 / 128.0,
-    35.0 / 128.0,
+    39.0 / 128.0,
     36.0 / 128.0,
     37.0 / 128.0,
 };
@@ -157,8 +157,19 @@ static Fdtd1DJetLabiumParameters GetRankJetParameters (
     u32 rank_note_index
 )
 {
+    Fdtd1DJetLabiumParameters parameters;
+
     ASSERT(rank_note_index < RANK_NOTE_COUNT);
-    return GetJetProfileParameters(jet_profile);
+
+    parameters = GetJetProfileParameters(jet_profile);
+
+    if (RANK_NOTE_SEMITONE_OFFSETS[rank_note_index] == 5)
+    {
+        parameters.feedback_leak *= 0.90f;
+        parameters.pressure_feedback *= 1.08f;
+    }
+
+    return parameters;
 }
 
 static Fdtd1DOutputExtractionMode ToRenderSourceOutputExtractionMode (AppOutputExtractionMode app_mode)
@@ -291,6 +302,8 @@ static Fdtd1DJetLabiumParameters GetJetProfileParameters (AppJetProfile jet_prof
     parameters.feedback_leak = 0.35f;
     parameters.jet_smoothing = 0.30f;
     parameters.labium_split_gain = 1.9f;
+    parameters.labium_offset = 0.0f;
+    parameters.flow_nonlinearity = 1.0f;
     parameters.saturation_gain = 12.0f;
     parameters.drive_limit = 0.0022f;
     parameters.delay_samples = 9u;
@@ -308,6 +321,8 @@ static Fdtd1DJetLabiumParameters GetJetProfileParameters (AppJetProfile jet_prof
             parameters.feedback_leak = 0.45f;
             parameters.jet_smoothing = 0.22f;
             parameters.labium_split_gain = 1.4f;
+            parameters.labium_offset = 0.10f;
+            parameters.flow_nonlinearity = 0.85f;
             parameters.saturation_gain = 8.5f;
             parameters.drive_limit = 0.0028f;
             parameters.delay_samples = 8u;
@@ -322,6 +337,8 @@ static Fdtd1DJetLabiumParameters GetJetProfileParameters (AppJetProfile jet_prof
             parameters.feedback_leak = 0.55f;
             parameters.jet_smoothing = 0.50f;
             parameters.labium_split_gain = 2.6f;
+            parameters.labium_offset = -0.06f;
+            parameters.flow_nonlinearity = 1.15f;
             parameters.saturation_gain = 16.0f;
             parameters.drive_limit = 0.0018f;
             parameters.delay_samples = 11u;

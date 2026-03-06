@@ -32,6 +32,8 @@ static const Fdtd1DJetLabiumParameters DEFAULT_JET_LABIUM_PARAMETERS =
     0.35f,    /* feedback_leak */
     0.30f,    /* jet_smoothing */
     1.9f,     /* labium_split_gain */
+    0.0f,     /* labium_offset */
+    1.0f,     /* flow_nonlinearity */
     12.0f,    /* saturation_gain */
     0.0022f,  /* drive_limit */
     9u        /* delay_samples */
@@ -435,6 +437,16 @@ static bool ValidateJetLabiumParameters (const Fdtd1DJetLabiumParameters *parame
         return false;
     }
 
+    if ((parameters->labium_offset < -2.0f) || (parameters->labium_offset > 2.0f))
+    {
+        return false;
+    }
+
+    if ((parameters->flow_nonlinearity < 0.25f) || (parameters->flow_nonlinearity > 2.5f))
+    {
+        return false;
+    }
+
     if (parameters->saturation_gain <= 0.0f)
     {
         return false;
@@ -582,6 +594,10 @@ static f32 ComputeJetLabiumExcitation (
     f32 feedback_signal;
     f32 drive_reference;
     f32 available_wind_drive;
+    f32 normalized_available_wind;
+    f32 normalized_operating_wind;
+    f32 jet_flow_drive;
+    f32 labium_offset_term;
     f32 normalized_wind_drive;
     f32 jet_drive;
     f32 jet_error;
@@ -704,9 +720,20 @@ static f32 ComputeJetLabiumExcitation (
     );
     available_wind_drive = soft_wind_drive - (JET_LABIUM_BACKPRESSURE_COUPLING * backpressure_term);
     available_wind_drive = ClampF32(available_wind_drive, 0.0f, 0.1f);
+    normalized_available_wind = available_wind_drive / drive_reference;
+    normalized_available_wind = ClampF32(normalized_available_wind, 0.0f, 4.0f);
+    normalized_operating_wind = (normalized_available_wind - 0.10f) / 1.40f;
+    normalized_operating_wind = ClampF32(normalized_operating_wind, 0.0f, 1.60f);
+    if (normalized_operating_wind > 1.0f)
+    {
+        normalized_operating_wind = 1.0f + (0.35f * (normalized_operating_wind - 1.0f));
+    }
 
-    jet_noise = available_wind_drive * state->jet_labium.noise_scale * NextNoiseSample(state);
-    jet_drive = available_wind_drive + jet_noise - feedback_term;
+    jet_flow_drive = drive_reference * powf(normalized_operating_wind, state->jet_labium.flow_nonlinearity);
+    jet_flow_drive = ClampF32(jet_flow_drive, 0.0f, 0.1f);
+
+    jet_noise = jet_flow_drive * state->jet_labium.noise_scale * NextNoiseSample(state);
+    jet_drive = jet_flow_drive + jet_noise - feedback_term;
     jet_state = state->source_jet_state[source_index];
     jet_state += state->jet_labium.jet_smoothing * (jet_drive - jet_state);
     state->source_jet_state[source_index] = jet_state;
@@ -715,18 +742,19 @@ static f32 ComputeJetLabiumExcitation (
     regime_is_active = regime_state >= 0.5f;
     if (regime_is_active)
     {
-        regime_target = (normalized_wind_drive >= JET_REGIME_OFF_THRESHOLD) ? 1.0f : 0.0f;
+        regime_target = (normalized_operating_wind >= JET_REGIME_OFF_THRESHOLD) ? 1.0f : 0.0f;
     }
     else
     {
-        regime_target = (normalized_wind_drive >= JET_REGIME_ON_THRESHOLD) ? 1.0f : 0.0f;
+        regime_target = (normalized_operating_wind >= JET_REGIME_ON_THRESHOLD) ? 1.0f : 0.0f;
     }
     regime_state += JET_REGIME_SMOOTHING * (regime_target - regime_state);
     regime_state = ClampF32(regime_state, 0.0f, 1.0f);
     state->source_jet_regime_state[source_index] = regime_state;
 
     voiced_mix = ClampF32((regime_state - 0.1f) / 0.9f, 0.0f, 1.0f);
-    jet_error = jet_state - ((0.25f + (0.30f * voiced_mix)) * feedback_term);
+    labium_offset_term = state->jet_labium.labium_offset * drive_reference;
+    jet_error = jet_state - labium_offset_term - ((0.25f + (0.30f * voiced_mix)) * feedback_term);
     labium_gain = state->jet_labium.labium_split_gain * (0.70f + (0.60f * voiced_mix));
     labium_split = tanhf(labium_gain * jet_error);
     drive_norm = state->jet_labium.drive_limit;
@@ -739,7 +767,7 @@ static f32 ComputeJetLabiumExcitation (
     turbulence =
         turbulence_gain *
         state->jet_labium.noise_scale *
-        wind_drive *
+        jet_flow_drive *
         NextNoiseSample(state);
     mouth_input = (jet_error * labium_split) + turbulence;
     output_sample = state->jet_labium.max_output * tanhf(state->jet_labium.saturation_gain * mouth_input);
