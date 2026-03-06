@@ -882,9 +882,35 @@ static f32 ComputeAreaLossScale (
     return ClampF32(loss_scale, 0.25f, 4.0f);
 }
 
+static f32 ComputeCircularPerimeterToArea (f32 area_m2)
+{
+    f32 radius_m;
+
+    if (area_m2 <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    radius_m = sqrtf(area_m2 / (f32) FDTD_1D_PI);
+    if (radius_m <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    /*
+        For a circular cross section:
+        perimeter / area = (2 * pi * r) / (pi * r^2) = 2 / r
+        Higher values imply stronger viscothermal boundary-layer losses.
+    */
+    return 2.0f / radius_m;
+}
+
 static void InitializeGeometryAwareLossFields (Fdtd1DState *state, const Fdtd1DDesc *desc)
 {
     f32 area_loss_strength;
+    f32 hf_loss;
+    f32 hf_viscothermal_exponent;
+    f32 reference_perimeter_to_area;
     f32 reference_area_m2;
     u32 pressure_index;
     u32 velocity_index;
@@ -893,11 +919,20 @@ static void InitializeGeometryAwareLossFields (Fdtd1DState *state, const Fdtd1DD
     ASSERT(desc != NULL);
     ASSERT(state->pressure_loss != NULL);
     ASSERT(state->velocity_loss != NULL);
+    ASSERT(state->pressure_high_frequency_loss_per_cell != NULL);
+    ASSERT(state->velocity_high_frequency_loss_per_cell != NULL);
     ASSERT(state->area_pressure != NULL);
     ASSERT(state->area_velocity != NULL);
 
     reference_area_m2 = (f32) desc->area_loss_reference_m2;
     area_loss_strength = (f32) desc->area_loss_strength;
+    hf_loss = (f32) desc->uniform_high_frequency_loss;
+    hf_viscothermal_exponent = 0.5f;
+    reference_perimeter_to_area = ComputeCircularPerimeterToArea(reference_area_m2);
+    if (reference_perimeter_to_area <= 0.0f)
+    {
+        reference_perimeter_to_area = 1.0f;
+    }
 
     for (pressure_index = 0; pressure_index < state->pressure_cell_count; pressure_index += 1)
     {
@@ -913,6 +948,24 @@ static void InitializeGeometryAwareLossFields (Fdtd1DState *state, const Fdtd1DD
             0.0f,
             1.0f
         );
+        {
+            f32 local_perimeter_to_area;
+            f32 viscothermal_scale;
+
+            local_perimeter_to_area = ComputeCircularPerimeterToArea(state->area_pressure[pressure_index]);
+            if (local_perimeter_to_area <= 0.0f)
+            {
+                local_perimeter_to_area = reference_perimeter_to_area;
+            }
+
+            viscothermal_scale = local_perimeter_to_area / reference_perimeter_to_area;
+            viscothermal_scale = powf(ClampF32(viscothermal_scale, 0.25f, 4.0f), hf_viscothermal_exponent);
+            state->pressure_high_frequency_loss_per_cell[pressure_index] = ClampF32(
+                hf_loss * viscothermal_scale,
+                0.0f,
+                1.0f
+            );
+        }
     }
 
     for (velocity_index = 0; velocity_index < state->velocity_cell_count; velocity_index += 1)
@@ -929,6 +982,24 @@ static void InitializeGeometryAwareLossFields (Fdtd1DState *state, const Fdtd1DD
             0.0f,
             1.0f
         );
+        {
+            f32 local_perimeter_to_area;
+            f32 viscothermal_scale;
+
+            local_perimeter_to_area = ComputeCircularPerimeterToArea(state->area_velocity[velocity_index]);
+            if (local_perimeter_to_area <= 0.0f)
+            {
+                local_perimeter_to_area = reference_perimeter_to_area;
+            }
+
+            viscothermal_scale = local_perimeter_to_area / reference_perimeter_to_area;
+            viscothermal_scale = powf(ClampF32(viscothermal_scale, 0.25f, 4.0f), hf_viscothermal_exponent);
+            state->velocity_high_frequency_loss_per_cell[velocity_index] = ClampF32(
+                hf_loss * viscothermal_scale,
+                0.0f,
+                1.0f
+            );
+        }
     }
 }
 
@@ -1020,7 +1091,7 @@ static void UpdateVelocityField (Fdtd1DState *state)
         state->velocity[velocity_index] = ApplyFrequencyDependentLoss(
             state->velocity[velocity_index],
             &state->velocity_previous[velocity_index],
-            state->velocity_high_frequency_loss
+            state->velocity_high_frequency_loss_per_cell[velocity_index]
         );
     }
 
@@ -1178,7 +1249,7 @@ static void UpdatePressureField (Fdtd1DState *state)
         state->pressure[pressure_index] = ApplyFrequencyDependentLoss(
             state->pressure[pressure_index],
             &state->pressure_previous[pressure_index],
-            state->pressure_high_frequency_loss
+            state->pressure_high_frequency_loss_per_cell[pressure_index]
         );
     }
 }
@@ -1626,6 +1697,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     state->area_velocity = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
     state->pressure_loss = MEMORY_ARENA_PUSH_ARRAY(arena, desc->pressure_cell_count, f32);
     state->velocity_loss = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
+    state->pressure_high_frequency_loss_per_cell = MEMORY_ARENA_PUSH_ARRAY(arena, desc->pressure_cell_count, f32);
+    state->velocity_high_frequency_loss_per_cell = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
     state->pressure_previous = MEMORY_ARENA_PUSH_ARRAY(arena, desc->pressure_cell_count, f32);
     state->velocity_previous = MEMORY_ARENA_PUSH_ARRAY(arena, desc->velocity_cell_count, f32);
     state->pressure_update_coeff = MEMORY_ARENA_PUSH_ARRAY(arena, desc->pressure_cell_count, f32);
@@ -1637,6 +1710,8 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
         (state->area_velocity == NULL) ||
         (state->pressure_loss == NULL) ||
         (state->velocity_loss == NULL) ||
+        (state->pressure_high_frequency_loss_per_cell == NULL) ||
+        (state->velocity_high_frequency_loss_per_cell == NULL) ||
         (state->pressure_previous == NULL) ||
         (state->velocity_previous == NULL) ||
         (state->pressure_update_coeff == NULL) ||

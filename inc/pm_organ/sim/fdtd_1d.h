@@ -135,6 +135,8 @@ typedef struct Fdtd1DState
 
     f32 *pressure_loss;
     f32 *velocity_loss;
+    f32 *pressure_high_frequency_loss_per_cell;
+    f32 *velocity_high_frequency_loss_per_cell;
     f32 *pressure_previous;
     f32 *velocity_previous;
     f32 pressure_high_frequency_loss;
