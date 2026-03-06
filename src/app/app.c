@@ -305,7 +305,7 @@ static Fdtd1DJetLabiumParameters GetJetProfileParameters (AppJetProfile jet_prof
     parameters.labium_offset = 0.0f;
     parameters.flow_nonlinearity = 1.0f;
     parameters.saturation_gain = 12.0f;
-    parameters.drive_limit = 0.0022f;
+    parameters.drive_limit = 0.0018f;
     parameters.delay_samples = 9u;
 
     switch (jet_profile)

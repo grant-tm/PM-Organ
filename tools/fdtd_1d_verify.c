@@ -1386,7 +1386,7 @@ static void InitializeVerificationSettings (VerificationSettings *settings)
     settings->jet_labium_parameters.labium_offset = 0.0f;
     settings->jet_labium_parameters.flow_nonlinearity = 1.0f;
     settings->jet_labium_parameters.saturation_gain = 12.0f;
-    settings->jet_labium_parameters.drive_limit = 0.0022f;
+    settings->jet_labium_parameters.drive_limit = 0.0018f;
     settings->jet_labium_parameters.delay_samples = 9;
     settings->csv_output_path = NULL;
     settings->source_index_was_overridden = false;

@@ -150,9 +150,9 @@ typedef struct Fdtd1DState
     u32 *probe_output_channels;
 
     u32 *source_cell_indices;
-    f32 *source_jet_state;
+    f32 *source_jet_velocity_state;
+    f32 *source_jet_displacement_state;
     f32 *source_mouth_pressure_drop_state;
-    f32 *source_jet_regime_state;
     f32 *mouth_feedback_delay_buffer;
     u32 *mouth_feedback_delay_lengths;
     u32 *mouth_feedback_delay_indices;
