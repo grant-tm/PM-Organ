@@ -282,8 +282,12 @@ static void ResetStateCallback (Simulation *simulation)
     }
     state->left_previous_outgoing_pressure = 0.0f;
     state->left_previous_incoming_pressure = 0.0f;
+    state->left_previous_fast_outgoing_pressure = 0.0f;
+    state->left_previous_fast_incoming_pressure = 0.0f;
     state->right_previous_outgoing_pressure = 0.0f;
     state->right_previous_incoming_pressure = 0.0f;
+    state->right_previous_fast_outgoing_pressure = 0.0f;
+    state->right_previous_fast_incoming_pressure = 0.0f;
     state->left_boundary_outgoing_wave = 0.0f;
     state->left_boundary_incoming_wave = 0.0f;
     state->right_boundary_outgoing_wave = 0.0f;
@@ -591,11 +595,21 @@ static f32 ComputeJetLabiumExcitation (
     static const f32 JET_LABIUM_BACKPRESSURE_LIMIT_SCALE = 6.0f;
     static const f32 JET_DISPLACEMENT_FEEDBACK_COUPLING = 0.30f;
     static const f32 JET_DISPLACEMENT_DAMPING = 0.18f;
+    static const u32 JET_COUPLING_NEWTON_ITERATION_COUNT = 2;
+    static const f32 JET_COUPLING_MIN_DERIVATIVE = 0.25f;
     f32 delayed_feedback;
+    f32 acoustic_term;
     f32 backpressure_term;
+    f32 coupling_load;
+    f32 coupling_rhs;
+    f32 coupling_sech_squared;
+    f32 coupling_tanh_value;
+    f32 coupling_residual;
+    f32 coupling_residual_derivative;
     f32 feedback_signal;
     f32 drive_reference;
     f32 effective_wind_drive;
+    f32 implicit_flow_candidate;
     f32 mouth_pressure_drop_state;
     f32 mouth_pressure_drop_target;
     f32 mouth_pressure_drop_update_gain;
@@ -625,6 +639,7 @@ static f32 ComputeJetLabiumExcitation (
     u32 dynamic_delay_min;
     u32 dynamic_delay_range;
     u32 target_delay_samples;
+    u32 coupling_iteration;
     u32 velocity_index;
 
     ASSERT(state != NULL);
@@ -730,9 +745,41 @@ static f32 ComputeJetLabiumExcitation (
     state->source_mouth_pressure_drop_state[source_index] = mouth_pressure_drop_state;
 
     effective_wind_drive = ClampF32(mouth_pressure_drop_state, 0.0f, 0.1f);
-    jet_velocity_target = drive_reference * sqrtf(ClampF32(effective_wind_drive / drive_reference, 0.0f, 4.0f));
+    acoustic_term =
+        (0.55f * feedback_term) +
+        (0.25f * backpressure_term) +
+        (0.15f * (f32) state->characteristic_impedance * local_velocity);
+    coupling_rhs = effective_wind_drive - acoustic_term;
+    coupling_rhs = ClampF32(coupling_rhs, -0.1f, 0.1f);
+
+    coupling_load = 0.20f + (0.90f * state->jet_labium.pressure_feedback);
+    coupling_load = ClampF32(coupling_load, 0.05f, 1.50f);
+    implicit_flow_candidate = state->source_jet_velocity_state[source_index];
+    implicit_flow_candidate = ClampF32(implicit_flow_candidate, -0.1f, 0.1f);
+
+    for (coupling_iteration = 0;
+         coupling_iteration < JET_COUPLING_NEWTON_ITERATION_COUNT;
+         coupling_iteration += 1)
+    {
+        f32 implicit_argument;
+
+        implicit_argument = (coupling_rhs - (coupling_load * implicit_flow_candidate)) / drive_reference;
+        implicit_argument = ClampF32(implicit_argument, -6.0f, 6.0f);
+        coupling_tanh_value = tanhf(implicit_argument);
+        coupling_sech_squared = 1.0f - (coupling_tanh_value * coupling_tanh_value);
+        coupling_residual = implicit_flow_candidate - (drive_reference * coupling_tanh_value);
+        coupling_residual_derivative = 1.0f + (coupling_load * coupling_sech_squared);
+        if (coupling_residual_derivative < JET_COUPLING_MIN_DERIVATIVE)
+        {
+            coupling_residual_derivative = JET_COUPLING_MIN_DERIVATIVE;
+        }
+
+        implicit_flow_candidate -= coupling_residual / coupling_residual_derivative;
+        implicit_flow_candidate = ClampF32(implicit_flow_candidate, -0.1f, 0.1f);
+    }
+
     jet_velocity_target = drive_reference * powf(
-        ClampF32(jet_velocity_target / drive_reference, 0.0f, 2.0f),
+        ClampF32(implicit_flow_candidate / drive_reference, 0.0f, 2.0f),
         state->jet_labium.flow_nonlinearity
     );
     jet_velocity_target = ClampF32(jet_velocity_target, 0.0f, 0.1f);
@@ -792,6 +839,45 @@ static f32 FilterOpenBoundaryReflection (
     *previous_incoming_pressure = incoming_pressure;
 
     return incoming_pressure;
+}
+
+static f32 FilterOpenBoundaryReflectionComposite (
+    f32 slow_filter_a1,
+    f32 slow_filter_b0,
+    f32 slow_filter_b1,
+    f32 fast_filter_a1,
+    f32 fast_filter_b0,
+    f32 fast_filter_b1,
+    f32 slow_mix,
+    f32 outgoing_pressure,
+    f32 *slow_previous_outgoing_pressure,
+    f32 *slow_previous_incoming_pressure,
+    f32 *fast_previous_outgoing_pressure,
+    f32 *fast_previous_incoming_pressure
+)
+{
+    f32 fast_component;
+    f32 slow_component;
+
+    slow_mix = ClampF32(slow_mix, 0.0f, 1.0f);
+    slow_component = FilterOpenBoundaryReflection(
+        slow_filter_a1,
+        slow_filter_b0,
+        slow_filter_b1,
+        outgoing_pressure,
+        slow_previous_outgoing_pressure,
+        slow_previous_incoming_pressure
+    );
+    fast_component = FilterOpenBoundaryReflection(
+        fast_filter_a1,
+        fast_filter_b0,
+        fast_filter_b1,
+        outgoing_pressure,
+        fast_previous_outgoing_pressure,
+        fast_previous_incoming_pressure
+    );
+
+    return ClampBoundaryWaveSample((slow_mix * slow_component) + ((1.0f - slow_mix) * fast_component));
 }
 
 static f32 ComputeBoundaryEmittedSample (
@@ -1072,6 +1158,61 @@ static void InitializeOpenBoundaryFilter (
         (f32) ((-reflection_numerator_slope * bilinear_scale + reflection_numerator_constant) / denominator_0);
 }
 
+static void InitializeOpenBoundaryReflectionModel (
+    const Fdtd1DState *state,
+    f32 boundary_area_m2,
+    f64 open_end_correction_coefficient,
+    f64 open_end_radiation_resistance_scale,
+    f32 *slow_filter_a1,
+    f32 *slow_filter_b0,
+    f32 *slow_filter_b1,
+    f32 *fast_filter_a1,
+    f32 *fast_filter_b0,
+    f32 *fast_filter_b1,
+    f32 *filter_mix
+)
+{
+    f64 fast_end_correction_scale;
+    f64 fast_radiation_resistance_scale;
+
+    ASSERT(state != NULL);
+    ASSERT(slow_filter_a1 != NULL);
+    ASSERT(slow_filter_b0 != NULL);
+    ASSERT(slow_filter_b1 != NULL);
+    ASSERT(fast_filter_a1 != NULL);
+    ASSERT(fast_filter_b0 != NULL);
+    ASSERT(fast_filter_b1 != NULL);
+    ASSERT(filter_mix != NULL);
+
+    InitializeOpenBoundaryFilter(
+        state,
+        boundary_area_m2,
+        open_end_correction_coefficient,
+        open_end_radiation_resistance_scale,
+        slow_filter_a1,
+        slow_filter_b0,
+        slow_filter_b1
+    );
+
+    /*
+        Secondary branch approximates a faster radiation component so
+        reflected energy rolls off more plausibly across frequency.
+    */
+    fast_end_correction_scale = 0.40;
+    fast_radiation_resistance_scale = 1.60;
+    InitializeOpenBoundaryFilter(
+        state,
+        boundary_area_m2,
+        open_end_correction_coefficient * fast_end_correction_scale,
+        open_end_radiation_resistance_scale * fast_radiation_resistance_scale,
+        fast_filter_a1,
+        fast_filter_b0,
+        fast_filter_b1
+    );
+
+    *filter_mix = 0.72f;
+}
+
 static void UpdateVelocityField (Fdtd1DState *state)
 {
     f32 characteristic_impedance;
@@ -1116,13 +1257,19 @@ static void UpdateVelocityField (Fdtd1DState *state)
             outgoing_pressure = ClampBoundaryWaveSample(outgoing_pressure);
             if (state->left_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
-                incoming_pressure = FilterOpenBoundaryReflection(
+                incoming_pressure = FilterOpenBoundaryReflectionComposite(
                     state->left_open_reflection_filter_a1,
                     state->left_open_reflection_filter_b0,
                     state->left_open_reflection_filter_b1,
+                    state->left_open_reflection_filter_fast_a1,
+                    state->left_open_reflection_filter_fast_b0,
+                    state->left_open_reflection_filter_fast_b1,
+                    state->left_open_reflection_filter_mix,
                     outgoing_pressure,
                     &state->left_previous_outgoing_pressure,
-                    &state->left_previous_incoming_pressure
+                    &state->left_previous_incoming_pressure,
+                    &state->left_previous_fast_outgoing_pressure,
+                    &state->left_previous_fast_incoming_pressure
                 );
             }
             else
@@ -1173,13 +1320,19 @@ static void UpdateVelocityField (Fdtd1DState *state)
             outgoing_pressure = ClampBoundaryWaveSample(outgoing_pressure);
             if (state->right_boundary_type == FDTD_1D_BOUNDARY_TYPE_OPEN)
             {
-                incoming_pressure = FilterOpenBoundaryReflection(
+                incoming_pressure = FilterOpenBoundaryReflectionComposite(
                     state->right_open_reflection_filter_a1,
                     state->right_open_reflection_filter_b0,
                     state->right_open_reflection_filter_b1,
+                    state->right_open_reflection_filter_fast_a1,
+                    state->right_open_reflection_filter_fast_b0,
+                    state->right_open_reflection_filter_fast_b1,
+                    state->right_open_reflection_filter_mix,
                     outgoing_pressure,
                     &state->right_previous_outgoing_pressure,
-                    &state->right_previous_incoming_pressure
+                    &state->right_previous_incoming_pressure,
+                    &state->right_previous_fast_outgoing_pressure,
+                    &state->right_previous_fast_incoming_pressure
                 );
             }
             else
@@ -1822,28 +1975,36 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     if (desc->left_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)
     {
         state->left_reflection_coefficient = -1.0f;
-        InitializeOpenBoundaryFilter(
+        InitializeOpenBoundaryReflectionModel(
             state,
             state->area_velocity[0],
             open_end_correction_coefficient,
             open_end_radiation_resistance_scale,
             &state->left_open_reflection_filter_a1,
             &state->left_open_reflection_filter_b0,
-            &state->left_open_reflection_filter_b1
+            &state->left_open_reflection_filter_b1,
+            &state->left_open_reflection_filter_fast_a1,
+            &state->left_open_reflection_filter_fast_b0,
+            &state->left_open_reflection_filter_fast_b1,
+            &state->left_open_reflection_filter_mix
         );
     }
 
     if (desc->right_boundary.type == FDTD_1D_BOUNDARY_TYPE_OPEN)
     {
         state->right_reflection_coefficient = -1.0f;
-        InitializeOpenBoundaryFilter(
+        InitializeOpenBoundaryReflectionModel(
             state,
             state->area_velocity[state->velocity_cell_count - 1],
             open_end_correction_coefficient,
             open_end_radiation_resistance_scale,
             &state->right_open_reflection_filter_a1,
             &state->right_open_reflection_filter_b0,
-            &state->right_open_reflection_filter_b1
+            &state->right_open_reflection_filter_b1,
+            &state->right_open_reflection_filter_fast_a1,
+            &state->right_open_reflection_filter_fast_b0,
+            &state->right_open_reflection_filter_fast_b1,
+            &state->right_open_reflection_filter_mix
         );
     }
 
