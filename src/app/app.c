@@ -90,6 +90,7 @@ typedef struct AppState
     f32 listener_mouth_pressure_mix;
     f32 listener_crossfeed;
     f32 listener_lowpass_cutoff_hz;
+    f32 rank_windchest_pressure_state;
     f32 master_gain;
     bool output_is_muted;
     bool fdtd_source_is_active;
@@ -148,6 +149,11 @@ static const f64 RANK_NOTE_SOURCE_RATIOS[RANK_NOTE_COUNT] =
 static const u32 RANK_NOTE_CELL_COUNTS[RANK_NOTE_COUNT] =
 {
     38, 34, 30, 28, 25, 23, 20, 19
+};
+
+static const f64 RANK_NOTE_AIRFLOW_WEIGHTS[RANK_NOTE_COUNT] =
+{
+    1.00, 0.94, 0.88, 0.84, 0.78, 0.74, 0.68, 0.64
 };
 
 static Fdtd1DJetLabiumParameters GetJetProfileParameters (AppJetProfile jet_profile);
@@ -680,6 +686,51 @@ static void ProcessNoteEvents (AppState *app)
     }
 }
 
+static void UpdateRankWindchestCoupling (AppState *app, f64 block_seconds)
+{
+    static const f64 RANK_WINDCHEST_RECOVERY_HZ = 2.2;
+    static const f64 RANK_WINDCHEST_SAG_COEFFICIENT = 0.65;
+    f64 airflow_demand;
+    f64 pressure_delta;
+    f64 target_pressure;
+    u32 note_index;
+
+    ASSERT(app != NULL);
+    ASSERT(block_seconds > 0.0);
+
+    target_pressure = (f64) app->windchest_pressure;
+    airflow_demand = 0.0;
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        if (app->rank_note_is_down[note_index])
+        {
+            airflow_demand += RANK_NOTE_AIRFLOW_WEIGHTS[note_index];
+        }
+    }
+
+    pressure_delta =
+        (RANK_WINDCHEST_RECOVERY_HZ * (target_pressure - (f64) app->rank_windchest_pressure_state) -
+         (RANK_WINDCHEST_SAG_COEFFICIENT * airflow_demand * (f64) app->drive_amplitude)) *
+        block_seconds;
+    app->rank_windchest_pressure_state += (f32) pressure_delta;
+    if (app->rank_windchest_pressure_state < 0.0f)
+    {
+        app->rank_windchest_pressure_state = 0.0f;
+    }
+    if (app->rank_windchest_pressure_state > app->windchest_pressure)
+    {
+        app->rank_windchest_pressure_state = app->windchest_pressure;
+    }
+
+    for (note_index = 0; note_index < RANK_NOTE_COUNT; note_index += 1)
+    {
+        Fdtd1DRenderSource_SetWindchestPressure(
+            &app->rank_render_sources[note_index],
+            (f64) app->rank_windchest_pressure_state
+        );
+    }
+}
+
 static void RenderRankVoices (
     AppState *app,
     f32 *output,
@@ -701,6 +752,8 @@ static void RenderRankVoices (
     ASSERT(block_frame_count > 0);
     ASSERT(channel_count > 0);
     ASSERT(sample_rate > 0);
+
+    UpdateRankWindchestCoupling(app, (f64) block_frame_count / (f64) sample_rate);
 
     sample_count = (usize) block_frame_count * (usize) channel_count;
     memset(output, 0, sizeof(f32) * sample_count);
@@ -1077,6 +1130,10 @@ static void SetWindchestPressure (AppState *app, f32 windchest_pressure)
     }
 
     app->windchest_pressure = windchest_pressure;
+    if (app->rank_windchest_pressure_state > windchest_pressure)
+    {
+        app->rank_windchest_pressure_state = windchest_pressure;
+    }
     ApplyExcitationSettingsToSources(app);
     RestartSpeechForAllSources(app);
 }
@@ -1469,6 +1526,7 @@ int App_Run (void)
     app->active_jet_profile = APP_JET_PROFILE_BASELINE;
     app->drive_amplitude = 0.0f;
     app->windchest_pressure = 1.0f;
+    app->rank_windchest_pressure_state = app->windchest_pressure;
     app->speech_attack_seconds = 0.06f;
     app->speech_chiff_amount = 0.35f;
     app->speech_chiff_decay_seconds = 0.05f;
