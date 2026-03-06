@@ -272,6 +272,10 @@ static void ResetStateCallback (Simulation *simulation)
     {
         memset(state->source_jet_state, 0, sizeof(f32) * (usize) state->source_count);
     }
+    if ((state->source_mouth_pressure_drop_state != NULL) && (state->source_count > 0))
+    {
+        memset(state->source_mouth_pressure_drop_state, 0, sizeof(f32) * (usize) state->source_count);
+    }
     if ((state->source_jet_regime_state != NULL) && (state->source_count > 0))
     {
         memset(state->source_jet_regime_state, 0, sizeof(f32) * (usize) state->source_count);
@@ -594,6 +598,9 @@ static f32 ComputeJetLabiumExcitation (
     f32 feedback_signal;
     f32 drive_reference;
     f32 available_wind_drive;
+    f32 mouth_pressure_drop_state;
+    f32 mouth_pressure_drop_target;
+    f32 mouth_pressure_drop_update_gain;
     f32 normalized_available_wind;
     f32 normalized_operating_wind;
     f32 jet_flow_drive;
@@ -718,7 +725,21 @@ static f32 ComputeJetLabiumExcitation (
         -JET_LABIUM_BACKPRESSURE_LIMIT_SCALE * drive_reference,
         JET_LABIUM_BACKPRESSURE_LIMIT_SCALE * drive_reference
     );
-    available_wind_drive = soft_wind_drive - (JET_LABIUM_BACKPRESSURE_COUPLING * backpressure_term);
+
+    ASSERT(state->source_mouth_pressure_drop_state != NULL);
+    mouth_pressure_drop_state = state->source_mouth_pressure_drop_state[source_index];
+    mouth_pressure_drop_target =
+        soft_wind_drive -
+        (JET_LABIUM_BACKPRESSURE_COUPLING * backpressure_term) -
+        (0.40f * feedback_term);
+    mouth_pressure_drop_update_gain = 0.12f + (0.80f * state->jet_labium.jet_smoothing);
+    mouth_pressure_drop_state =
+        (mouth_pressure_drop_state + (mouth_pressure_drop_update_gain * mouth_pressure_drop_target)) /
+        (1.0f + mouth_pressure_drop_update_gain);
+    mouth_pressure_drop_state = ClampF32(mouth_pressure_drop_state, 0.0f, 0.1f);
+    state->source_mouth_pressure_drop_state[source_index] = mouth_pressure_drop_state;
+    available_wind_drive = mouth_pressure_drop_state;
+
     available_wind_drive = ClampF32(available_wind_drive, 0.0f, 0.1f);
     normalized_available_wind = available_wind_drive / drive_reference;
     normalized_available_wind = ClampF32(normalized_available_wind, 0.0f, 4.0f);
@@ -771,7 +792,6 @@ static f32 ComputeJetLabiumExcitation (
         NextNoiseSample(state);
     mouth_input = (jet_error * labium_split) + turbulence;
     output_sample = state->jet_labium.max_output * tanhf(state->jet_labium.saturation_gain * mouth_input);
-
     return ClampF32(output_sample, -state->jet_labium.max_output, state->jet_labium.max_output);
 }
 
@@ -1271,13 +1291,21 @@ static void ApplyExcitations (Simulation *simulation, SimulationProcessContext *
 
             case SIMULATION_EXCITATION_TYPE_JET_LABIUM:
             {
+                f32 unclamped_sample;
+
                 excitation_sample = ComputeJetLabiumExcitation(
                     state,
                     source_index,
                     cell_index,
                     ClampF32((f32) excitation->value, 0.0f, 0.1f)
                 );
-                excitation_sample = ClampF32(excitation_sample, -JET_LABIUM_INJECTION_MAX, JET_LABIUM_INJECTION_MAX);
+                if (isfinite(excitation_sample) == 0)
+                {
+                    excitation_sample = 0.0f;
+                }
+
+                unclamped_sample = excitation_sample;
+                excitation_sample = ClampF32(unclamped_sample, -JET_LABIUM_INJECTION_MAX, JET_LABIUM_INJECTION_MAX);
             } break;
 
             case SIMULATION_EXCITATION_TYPE_CUSTOM:
@@ -1663,6 +1691,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     {
         state->source_cell_indices = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
         state->source_jet_state = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, f32);
+        state->source_mouth_pressure_drop_state = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, f32);
         state->source_jet_regime_state = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, f32);
         state->mouth_feedback_delay_lengths = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
         state->mouth_feedback_delay_indices = MEMORY_ARENA_PUSH_ARRAY(arena, desc->source_count, u32);
@@ -1674,6 +1703,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
         );
         if ((state->source_cell_indices == NULL) ||
             (state->source_jet_state == NULL) ||
+            (state->source_mouth_pressure_drop_state == NULL) ||
             (state->source_jet_regime_state == NULL) ||
             (state->mouth_feedback_delay_lengths == NULL) ||
             (state->mouth_feedback_delay_indices == NULL) ||
@@ -1728,6 +1758,7 @@ bool Fdtd1D_Initialize (Fdtd1D *solver, MemoryArena *arena, const Fdtd1DDesc *de
     {
         state->source_cell_indices[source_index] = desc->source_descs[source_index].cell_index;
         state->source_jet_state[source_index] = 0.0f;
+        state->source_mouth_pressure_drop_state[source_index] = 0.0f;
         state->source_jet_regime_state[source_index] = 0.0f;
         state->mouth_feedback_delay_lengths[source_index] = DEFAULT_NONLINEAR_MOUTH_PARAMETERS.delay_samples;
         state->mouth_feedback_delay_indices[source_index] = 0;
@@ -1858,6 +1889,8 @@ bool Fdtd1D_SetJetLabiumParameters (
     {
         ResetSourceDelayState(state, source_index, parameters->delay_samples);
         state->source_jet_state[source_index] = 0.0f;
+        state->source_mouth_pressure_drop_state[source_index] = 0.0f;
+        state->source_jet_regime_state[source_index] = 0.0f;
     }
 
     return true;

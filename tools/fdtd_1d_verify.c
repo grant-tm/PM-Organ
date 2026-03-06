@@ -1479,6 +1479,7 @@ static void ParseArguments (int argc, char **argv, VerificationSettings *setting
             continue;
         }
 
+
         if (TryParseUnsignedValue(argument, "blocks=", &parsed_value))
         {
             if (parsed_value > 0)
@@ -4394,7 +4395,6 @@ int main (int argc, char **argv)
                 attack_gate_ok &&
                 harmonic_gate_ok &&
                 stability_gate_ok;
-
             if ((note_index == 0) && (suite_result->measured_f0_hz > 0.0))
             {
                 base_f0_hz = suite_result->measured_f0_hz;

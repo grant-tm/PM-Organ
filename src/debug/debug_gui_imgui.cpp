@@ -333,6 +333,7 @@ extern "C" void DebugGui_Draw (DebugGui *gui, const DebugGuiFrameDesc *frame_des
                 frame_actions->selected_source_coupling_mode = (u32) preset_index;
             }
         }
+
     }
     ImGui::End();
 
